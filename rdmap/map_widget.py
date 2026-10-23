@@ -536,6 +536,7 @@ class TileMapWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         self._paint_selection(painter)
         self._paint_crosshair(painter)
+        self._paint_scale(painter)
         self._paint_attribution(painter)
         if self._provider.requires_key and not self._api_key:
             card = QRectF(self.width() / 2 - 190, self.height() / 2 - 52, 380, 104)
@@ -575,7 +576,7 @@ class TileMapWidget(QWidget):
 
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, False)
-        grid_color = QColor(COLORS["primary"])
+        grid_color = QColor(COLORS["map_accent"])
         grid_color.setAlpha(80)
         pen = QPen(grid_color)
         pen.setWidth(1)
@@ -621,10 +622,10 @@ class TileMapWidget(QWidget):
 
             is_preview = self._bounds is None
             painter.save()
-            selection_color = QColor(COLORS["primary"])
+            selection_color = QColor(COLORS["map_accent"])
             selection_color.setAlpha(24)
             painter.setBrush(selection_color)
-            border = QPen(QColor(COLORS["primary"]))
+            border = QPen(QColor(COLORS["map_accent"]))
             border.setWidthF(1.6)
             border.setStyle(Qt.DashLine if is_preview else Qt.SolidLine)
             painter.setPen(border)
@@ -632,7 +633,7 @@ class TileMapWidget(QWidget):
 
             if not is_preview:
                 painter.setBrush(QColor("#ffffff"))
-                handle_pen = QPen(QColor(COLORS["primary"]))
+                handle_pen = QPen(QColor(COLORS["map_accent"]))
                 handle_pen.setWidthF(1.4)
                 painter.setPen(handle_pen)
                 for point in (
@@ -657,7 +658,7 @@ class TileMapWidget(QWidget):
             x, y = self._latlng_to_screen(lat, lng)
             painter.save()
             painter.setPen(QPen(QColor("#ffffff"), 2.0))
-            painter.setBrush(QColor(COLORS["primary"]))
+            painter.setBrush(QColor(COLORS["map_accent"]))
             painter.drawEllipse(QPointF(x, y), 5.0, 5.0)
             painter.restore()
 
@@ -676,10 +677,10 @@ class TileMapWidget(QWidget):
         painter.setFont(font)
         path = QPainterPath()
         path.addRoundedRect(label_rect, 4.0, 4.0)
-        painter.fillPath(path, QColor(255, 255, 255, 232))
+        painter.fillPath(path, QColor(14, 24, 19, 220))
         painter.setPen(QPen(QColor(COLORS["primary_container"]), 1.0))
         painter.drawPath(path)
-        painter.setPen(QColor(COLORS["primary"]))
+        painter.setPen(QColor(COLORS["map_on_overlay"]))
         painter.drawText(label_rect, Qt.AlignCenter, text)
         painter.restore()
 
@@ -699,6 +700,25 @@ class TileMapWidget(QWidget):
         painter.drawLine(x, 0, x, self.height())
         painter.restore()
 
+    def _paint_scale(self, painter: QPainter) -> None:
+        meters, pixels = tm.map_scale(self._center_lat, self._zoom)
+        label = f"{meters / 1000:g} km" if meters >= 1000 else f"{meters:g} m"
+        x, y = 20, self.height() - getattr(self, "scale_bottom_margin", 62)
+        painter.save()
+        font = QFont("Consolas")
+        font.setPointSizeF(8.5)
+        painter.setFont(font)
+        painter.setPen(QColor(14, 24, 19))
+        painter.drawText(x + 1, y - 8, label)
+        painter.setPen(QColor("white"))
+        painter.drawText(x, y - 9, label)
+        for color, width in ((QColor(14, 24, 19, 200), 4), (QColor("white"), 2)):
+            painter.setPen(QPen(color, width))
+            painter.drawLine(x, y - 5, x, y)
+            painter.drawLine(x, y, x + round(pixels), y)
+            painter.drawLine(x + round(pixels), y, x + round(pixels), y - 5)
+        painter.restore()
+
     def _paint_attribution(self, painter: QPainter) -> None:
         font = QFont(self.font())
         font.setPointSizeF(8.0)
@@ -708,7 +728,7 @@ class TileMapWidget(QWidget):
         text_height = metrics.height() + 4
         rect = QRectF(
             self.width() - text_width - 8,
-            self.height() - text_height - 8,
+            self.height() - text_height - getattr(self, "attribution_bottom_margin", 8),
             text_width,
             text_height,
         )
@@ -716,8 +736,8 @@ class TileMapWidget(QWidget):
         painter.setFont(font)
         path = QPainterPath()
         path.addRoundedRect(rect, 4.0, 4.0)
-        painter.fillPath(path, QColor(255, 255, 255, 205))
-        painter.setPen(QColor(71, 85, 105))
+        painter.fillPath(path, QColor(14, 24, 19, 205))
+        painter.setPen(QColor(COLORS["map_on_overlay"]))
         painter.drawText(rect, Qt.AlignCenter, text)
         painter.restore()
 

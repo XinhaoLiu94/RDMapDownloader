@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -10,41 +9,25 @@ from pathlib import Path
 from PyQt5.QtCore import (
     QSettings,
     QSignalBlocker,
-    QSize,
     Qt,
     QTime,
     QTimer,
     QUrl,
 )
-from PyQt5.QtGui import QDesktopServices, QFont, QIcon, QKeySequence
+from PyQt5.QtGui import QDesktopServices, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
-    QCheckBox,
-    QComboBox,
     QFileDialog,
-    QFrame,
-    QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMenu,
+    QMenuBar,
     QMessageBox,
     QPlainTextEdit,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
     QShortcut,
-    QSizePolicy,
     QSpinBox,
-    QSplitter,
-    QStatusBar,
-    QTabWidget,
-    QToolBar,
-    QVBoxLayout,
-    QWidget,
 )
 
 from . import __version__
@@ -64,25 +47,22 @@ from .config import (
     default_download_dir,
     default_download_root,
 )
-from .map_widget import TileMapWidget
 from .coordinates import CoordinateSpinBox
 from .download_estimate import estimate_download_bytes, estimated_tile_bytes
 from .download_levels import format_levels, parse_levels, ranges_for_levels
-from .regions import REGION_MAP, REGION_PRESETS
+from .regions import REGION_MAP
 from .tasks import TaskStore
 from .task_manager import TaskManagerDialog
-from .theme import COLORS
+from .theme import set_state, theme_manager
+from .workspace_ui import WorkspaceUi
 from .paths import directory_size, format_bytes, format_duration, resource_path
 from .providers import (
-    DEFAULT_PROVIDER_KEY,
     DEFAULT_SOURCE_KEY,
-    MAP_SOURCES,
     PROVIDER_MAP,
     SOURCE_MAP,
     providers_for_source,
 )
 from .tile_math import (
-    MAX_LATITUDE,
     TileRange,
     format_bounds,
     range_from_bounds,
@@ -108,10 +88,11 @@ MAX_TILE_WARNING = 20_000
 MAX_TILE_HARD_LIMIT = 1_000_000
 
 
-class MainWindow(QMainWindow):
+class MainWindow(WorkspaceUi, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._settings = QSettings()
+        self._theme_manager = theme_manager()
         self._range: TileRange | None = None
         self._updating_range = False
         self._applying_region_preset = False
@@ -158,535 +139,14 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._connect_signals()
         self._restore_settings()
+        self._theme_manager.changed.connect(self._on_theme_changed)
+        self._on_theme_changed()
         self._refresh_task_summary()
-        self._append_log("就绪：滚轮缩放，拖拽平移，双击放大。")
-        self.statusBar().showMessage("就绪：滚轮缩放 · 拖拽平移 · 点击“开始框选”选择下载范围")
+        self.statusBar().showMessage("就绪")
 
     # ------------------------------------------------------------------
     # 界面构建
     # ------------------------------------------------------------------
-    def _build_ui(self) -> None:
-        central = QWidget(self)
-        central.setObjectName("workspace")
-        outer = QVBoxLayout(central)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(16)
-
-        self._splitter = QSplitter(Qt.Horizontal, self)
-        self._splitter.setChildrenCollapsible(False)
-        self._splitter.setHandleWidth(16)
-
-        self.map = TileMapWidget(self)
-        map_frame = QFrame(self)
-        map_frame.setObjectName("mapFrame")
-        map_layout = QVBoxLayout(map_frame)
-        map_layout.setContentsMargins(0, 0, 0, 0)
-        map_layout.setSpacing(0)
-        map_layout.addWidget(self._build_toolbar())
-        map_layout.addWidget(self.map)
-        map_footer = QLabel("  拖拽平移   ·   滚轮缩放   ·   双击放大                                      北向上 · 2D")
-        map_footer.setObjectName("mapFooter")
-        map_footer.setMinimumHeight(32)
-        map_layout.addWidget(map_footer)
-
-        self._splitter.addWidget(map_frame)
-        self._splitter.addWidget(self._build_side_panel())
-        self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 0)
-        self._splitter.setSizes([1020, 424])
-        outer.addWidget(self._splitter, 1)
-        self.setCentralWidget(central)
-
-        self._build_statusbar()
-
-    def _build_toolbar(self) -> QToolBar:
-        toolbar = QToolBar("地图工具", self)
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
-        toolbar.setIconSize(QSize(18, 18))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        toolbar.setObjectName("mapToolbar")
-        preview_title = QLabel("地图预览")
-        preview_title.setObjectName("sectionTitle")
-        toolbar.addWidget(preview_title)
-        toolbar.addSeparator()
-
-        self.source_combo = QComboBox()
-        self.source_combo.setMinimumWidth(150)
-        self.source_combo.setToolTip("选择高德、Google、天地图或 Esri")
-        for source in MAP_SOURCES:
-            self.source_combo.addItem(source.name, source.key)
-            self.source_combo.setItemData(
-                self.source_combo.count() - 1,
-                f"{source.description}\n坐标系：{source.coordinate_system}",
-                Qt.ToolTipRole,
-            )
-        self.provider_combo = QComboBox()
-        self.provider_combo.setMinimumWidth(144)
-        self.provider_combo.setToolTip("切换当前图源下的图层类型")
-        for provider in providers_for_source(DEFAULT_SOURCE_KEY):
-            self.provider_combo.addItem(provider.name, provider.key)
-            self.provider_combo.setItemData(
-                self.provider_combo.count() - 1,
-                provider.description,
-                Qt.ToolTipRole,
-            )
-        default_index = self.provider_combo.findData(DEFAULT_PROVIDER_KEY)
-        self.provider_combo.setCurrentIndex(max(0, default_index))
-        self.grid_check = QCheckBox("瓦片网格")
-        self.grid_check.setToolTip("显示当前缩放级别下的瓦片边界")
-        toolbar.addWidget(self.grid_check)
-
-        toolbar.addSeparator()
-
-        zoom_label = QLabel("缩放")
-        toolbar.addWidget(zoom_label)
-        self.zoom_spin = QSpinBox()
-        self.zoom_spin.setRange(MIN_MAP_ZOOM, MAX_MAP_ZOOM)
-        self.zoom_spin.setPrefix("Z ")
-        self.zoom_spin.setFixedWidth(92)
-        self.zoom_spin.setToolTip("地图显示级别（滚轮缩放会同步）")
-        toolbar.addWidget(self.zoom_spin)
-
-        toolbar.addSeparator()
-        self.act_reset = QAction("复位视图", self)
-        self.act_reset.setToolTip("回到广州默认视野")
-        toolbar.addAction(self.act_reset)
-
-        self.act_use_view = QAction("当前视野框选", self)
-        self.act_use_view.setToolTip("用地图当前可见范围作为框选范围")
-        toolbar.addAction(self.act_use_view)
-
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
-
-        return toolbar
-
-    def _build_statusbar(self) -> None:
-        status = QStatusBar(self)
-        self.setStatusBar(status)
-
-        self._coord_label = QLabel("经度 --   纬度 --")
-        coord_font = QFont("Consolas")
-        coord_font.setPointSize(9)
-        self._coord_label.setFont(coord_font)
-        self._coord_label.setMinimumWidth(220)
-
-        self._zoom_label = QLabel("级别 --")
-        self._provider_label = QLabel("GCJ-02")
-        self._provider_label.setToolTip("高德坐标系（GCJ-02）")
-
-        status.addPermanentWidget(self._coord_label)
-        status.addPermanentWidget(self._zoom_label)
-        status.addPermanentWidget(self._provider_label)
-        status.showMessage("就绪")
-
-    def _build_side_panel(self) -> QScrollArea:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setMinimumWidth(400)
-        scroll.setMaximumWidth(480)
-        self._side_scroll = scroll
-
-        body = QWidget()
-        body.setObjectName("sidePanel")
-        body.setAttribute(Qt.WA_StyledBackground, True)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 4, 4)
-        layout.setSpacing(8)
-
-        layout.addWidget(self._build_layer_group())
-
-        layout.addWidget(self._build_range_group())
-        layout.addWidget(self._build_tile_group())
-        self.task_tabs = QTabWidget()
-        self.task_tabs.setObjectName("taskTabs")
-        self.task_tabs.setDocumentMode(True)
-        self.task_tabs.tabBar().setExpanding(True)
-        self.task_tabs.addTab(self._build_download_group(), "下载瓦片")
-        self.task_tabs.addTab(self._build_stitch_group(), "拼接图片")
-        layout.addWidget(self.task_tabs)
-
-        self.btn_toggle_log = QPushButton("显示运行日志")
-        self.btn_toggle_log.setObjectName("logToggle")
-        self.btn_toggle_log.setCheckable(True)
-        self.btn_toggle_log.setToolTip("展开查看下载、拼接与错误日志")
-        layout.addWidget(self.btn_toggle_log)
-
-        self.log_group = self._build_log_group()
-        self.log_group.setVisible(False)
-        layout.addWidget(self.log_group)
-        layout.addStretch(1)
-
-        scroll.setWidget(body)
-        return scroll
-
-    def _make_card(self, title: str, step: str = "") -> tuple[QGroupBox, QVBoxLayout]:
-        group = QGroupBox()
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(16, 12, 16, 14)
-        layout.setSpacing(8)
-        heading = QHBoxLayout()
-        heading.setSpacing(8)
-        if step:
-            number = QLabel(step)
-            number.setObjectName("stepNumber")
-            number.setAlignment(Qt.AlignCenter)
-            number.setFixedSize(24, 24)
-            heading.addWidget(number)
-        label = QLabel(title)
-        label.setObjectName("cardTitle")
-        heading.addWidget(label)
-        heading.addStretch()
-        layout.addLayout(heading)
-        return group, layout
-
-    def _build_layer_group(self) -> QGroupBox:
-        group, layout = self._make_card("地图图层", "1")
-        row = QHBoxLayout()
-        row.addWidget(self.source_combo, 1)
-        row.addWidget(self.provider_combo, 1)
-        layout.addLayout(row)
-        self.layer_description = QLabel()
-        self.layer_description.setObjectName("layerDescription")
-        self.layer_description.setWordWrap(True)
-        layout.addWidget(self.layer_description)
-        self.key_panel = QWidget()
-        key_layout = QVBoxLayout(self.key_panel)
-        key_layout.setContentsMargins(0, 0, 0, 0)
-        self.api_key_edit = QLineEdit(os.environ.get("TIANDITU_KEY", ""))
-        self.api_key_edit.setEchoMode(QLineEdit.Password)
-        self.api_key_edit.setPlaceholderText("输入天地图 Key，按 Enter 应用")
-        self.api_key_edit.setToolTip("本次会话使用；也可通过 TIANDITU_KEY 环境变量设置，不保存到配置。")
-        self.api_key_edit.editingFinished.connect(self._apply_api_key)
-        key_layout.addWidget(self.api_key_edit)
-        key_help = QLabel('<a href="https://console.tianditu.gov.cn/">申请天地图 Key ↗</a>  ·  仅本次会话使用')
-        key_help.setObjectName("hintLabel")
-        key_help.setOpenExternalLinks(True)
-        key_layout.addWidget(key_help)
-        self.key_panel.hide()
-        layout.addWidget(self.key_panel)
-        self.map.set_api_key(self.api_key_edit.text())
-        return group
-
-    def _apply_api_key(self) -> None:
-        self.map.set_api_key(self.api_key_edit.text())
-        self._on_provider_changed()
-
-    def _build_range_group(self) -> QGroupBox:
-        group, layout = self._make_card("选择下载区域", "2")
-
-        presets_row = QHBoxLayout()
-        presets_row.setSpacing(8)
-        self.region_combo = QComboBox()
-        self.region_combo.setAccessibleName("常用区域")
-        self.region_combo.addItem("自定义区域", "")
-        for preset in REGION_PRESETS:
-            self.region_combo.addItem(preset.name, preset.key)
-        self.region_combo.setToolTip("一键填入近似矩形范围并定位地图；包含周边海域，可继续修改四至。")
-        self.coord_format_combo = QComboBox()
-        self.coord_format_combo.setAccessibleName("坐标输入格式")
-        self.coord_format_combo.addItem("十进制度", "decimal")
-        self.coord_format_combo.addItem("度分秒", "dms")
-        self.coord_format_combo.setToolTip("切换显示和输入格式，保留实际经纬度与下载范围")
-        presets_row.addWidget(self.region_combo, 1)
-        presets_row.addWidget(self.coord_format_combo)
-        layout.addLayout(presets_row)
-
-        self.coord_hint = QLabel(
-            "点“开始框选”后在地图上点两个对角点，或直接输入 GCJ-02 经纬度。"
-        )
-        self.coord_hint.setWordWrap(True)
-        self.coord_hint.setObjectName("hintLabel")
-        layout.addWidget(self.coord_hint)
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-
-        self.north_spin = self._make_coord_spin(DEFAULT_NORTH, -MAX_LATITUDE, MAX_LATITUDE)
-        self.south_spin = self._make_coord_spin(DEFAULT_SOUTH, -MAX_LATITUDE, MAX_LATITUDE)
-        self.west_spin = self._make_coord_spin(DEFAULT_WEST, -180.0, 180.0)
-        self.east_spin = self._make_coord_spin(DEFAULT_EAST, -180.0, 180.0)
-
-        for row, (label_text, left_spin, right_label, right_spin) in enumerate(
-            (
-                ("北界", self.north_spin, "南界", self.south_spin),
-                ("西界", self.west_spin, "东界", self.east_spin),
-            )
-        ):
-            left_label = QLabel(label_text)
-            right_label_widget = QLabel(right_label)
-            left_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            right_label_widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            grid.addWidget(left_label, row, 0)
-            grid.addWidget(left_spin, row, 1)
-            grid.addWidget(right_label_widget, row, 2)
-            grid.addWidget(right_spin, row, 3)
-        layout.addLayout(grid)
-
-        self.coord_format_hint = QLabel("十进制度示例：23.600000；南纬、西经用负数。")
-        self.coord_format_hint.setObjectName("hintLabel")
-        self.coord_format_hint.setWordWrap(True)
-        layout.addWidget(self.coord_format_hint)
-
-        self.region_hint = QLabel("预设为近似矩形范围，包含周边区域，可调整四至。")
-        self.region_hint.setObjectName("hintLabel")
-        self.region_hint.setWordWrap(True)
-        self.region_hint.hide()
-        layout.addWidget(self.region_hint)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        self.btn_draw = QPushButton("开始框选")
-        self.btn_draw.setObjectName("tonalButton")
-        self.btn_draw.setToolTip("进入框选模式，然后在地图上点击两个对角点")
-        self.btn_clear_draw = QPushButton("清空框选")
-        self.btn_clear_draw.setToolTip("清除地图上的框选矩形")
-        self.btn_use_view = QPushButton("当前视野")
-        self.btn_use_view.setToolTip("把当前地图可见范围填入上方经纬度")
-        buttons.addWidget(self.btn_draw, 1)
-        buttons.addWidget(self.btn_clear_draw, 1)
-        buttons.addWidget(self.btn_use_view, 1)
-        layout.addLayout(buttons)
-        return group
-
-    def _build_tile_group(self) -> QGroupBox:
-        group, layout = self._make_card("下载精度与范围", "3")
-
-        level_row = QHBoxLayout()
-        level_row.setSpacing(8)
-        level_row.addWidget(QLabel("当前级别 Z"))
-        self.level_spin = QSpinBox()
-        self.level_spin.setRange(MIN_TILE_ZOOM, MAX_TILE_ZOOM)
-        self.level_spin.setValue(DEFAULT_ZOOM)
-        self.level_spin.setFixedWidth(80)
-        self.level_spin.setToolTip("单级下载与拼接使用此级别；多级下载按下方级别列表执行。地图缩放时自动同步。")
-        level_row.addWidget(self.level_spin)
-        level_row.addStretch(1)
-        self.btn_locate = QPushButton("地图定位")
-        self.btn_locate.setToolTip("把地图移动到当前瓦片范围")
-        level_row.addWidget(self.btn_locate)
-        layout.addLayout(level_row)
-
-        self.multi_level_check = QCheckBox("多级连续下载")
-        self.multi_level_check.setToolTip("一次设置多个级别，按从低到高的顺序自动连续下载同一区域")
-        multi_row = QHBoxLayout()
-        multi_row.setSpacing(8)
-        multi_row.addWidget(self.multi_level_check)
-        self.multi_levels_panel = QWidget()
-        multi_layout = QVBoxLayout(self.multi_levels_panel)
-        multi_layout.setContentsMargins(0, 0, 0, 0)
-        multi_layout.setSpacing(6)
-        self.multi_levels_edit = QLineEdit()
-        self.multi_levels_edit.setPlaceholderText("例如：10-14, 16, 18")
-        self.multi_levels_edit.setToolTip("支持连续范围和不连续级别，例如 10-14, 16, 18；自动排序并去重。")
-        self.multi_levels_edit.hide()
-        multi_row.addWidget(self.multi_levels_edit, 1)
-        layout.addLayout(multi_row)
-        self.multi_levels_hint = QLabel("例如：10-14（连续）；10, 12, 15（指定）；10-12, 14（混合）。")
-        self.multi_levels_hint.setObjectName("hintLabel")
-        self.multi_levels_hint.setWordWrap(True)
-        self.multi_levels_hint.hide()
-        layout.addWidget(self.multi_levels_hint)
-        self.download_plan_label = QLabel()
-        self.download_plan_label.setObjectName("hintLabel")
-        self.download_plan_label.setWordWrap(True)
-        multi_layout.addWidget(self.download_plan_label)
-        self.multi_levels_panel.hide()
-        layout.addWidget(self.multi_levels_panel)
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-
-        self.row_min_spin = self._make_tile_spin()
-        self.row_max_spin = self._make_tile_spin()
-        self.col_min_spin = self._make_tile_spin()
-        self.col_max_spin = self._make_tile_spin()
-
-        row_label = QLabel("行 Row")
-        row_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(row_label, 0, 0)
-        grid.addWidget(self.row_min_spin, 0, 1)
-        tilde_row = QLabel("~")
-        tilde_row.setAlignment(Qt.AlignCenter)
-        grid.addWidget(tilde_row, 0, 2)
-        grid.addWidget(self.row_max_spin, 0, 3)
-
-        col_label = QLabel("列 Col")
-        col_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(col_label, 1, 0)
-        grid.addWidget(self.col_min_spin, 1, 1)
-        tilde_col = QLabel("~")
-        tilde_col.setAlignment(Qt.AlignCenter)
-        grid.addWidget(tilde_col, 1, 2)
-        grid.addWidget(self.col_max_spin, 1, 3)
-        self.tile_details = QWidget()
-        self.tile_details.setLayout(grid)
-        self.tile_details.hide()
-        layout.addWidget(self.tile_details)
-
-        count_row = QHBoxLayout()
-        count_row.setSpacing(8)
-        count_row.addWidget(QLabel("瓦片数量"))
-        self.tile_count_label = QLabel("—")
-        self.tile_count_label.setObjectName("tileCount")
-        self.tile_count_label.setToolTip("框选范围覆盖的瓦片总数")
-        count_row.addWidget(self.tile_count_label)
-        count_row.addStretch(1)
-        self.btn_tile_details = QPushButton("行列详情 ▾")
-        self.btn_tile_details.setObjectName("textButton")
-        self.btn_tile_details.setCheckable(True)
-        self.btn_tile_details.toggled.connect(self.tile_details.setVisible)
-        count_row.addWidget(self.btn_tile_details)
-        layout.addLayout(count_row)
-        self.image_size_label = QLabel()
-        self.image_size_label.setObjectName("hintLabel")
-        self.image_size_label.setWordWrap(True)
-        self.download_size_label = QLabel()
-        self.download_size_label.setObjectName("hintLabel")
-        self.download_size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        size_row = QHBoxLayout()
-        size_row.setSpacing(8)
-        size_row.addWidget(self.image_size_label, 1)
-        size_row.addWidget(self.download_size_label)
-        layout.addLayout(size_row)
-        return group
-
-    def _build_download_group(self) -> QGroupBox:
-        group = QGroupBox()
-        group.setObjectName("taskCard")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(6)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(6)
-        form.addWidget(QLabel("输出目录"), 0, 0)
-        self.download_dir_edit = QLineEdit()
-        self.download_dir_edit.setPlaceholderText("选择瓦片保存目录")
-        self.download_dir_edit.setToolTip(
-            "下载目录结构：输出目录 / 级别 / 行 / 列.png\n"
-            "默认按图源类型分目录，避免不同图源的瓦片互相覆盖"
-        )
-        self._set_download_dir_text(str(default_download_dir()))
-        form.addWidget(self.download_dir_edit, 0, 1)
-        self.btn_download_browse = QPushButton("…")
-        self.btn_download_browse.setObjectName("browseButton")
-        self.btn_download_browse.setToolTip("选择输出目录")
-        form.addWidget(self.btn_download_browse, 0, 2)
-
-        options = QHBoxLayout()
-        options.setSpacing(8)
-        options.addWidget(QLabel("并发"))
-        self.concurrency_spin = QSpinBox()
-        self.concurrency_spin.setRange(1, MAX_CONCURRENCY)
-        self.concurrency_spin.setValue(DEFAULT_CONCURRENCY)
-        self.concurrency_spin.setFixedWidth(62)
-        self.concurrency_spin.setToolTip("同时下载的瓦片数，过高可能被服务端限流")
-        options.addWidget(self.concurrency_spin)
-        self.skip_check = QCheckBox("跳过已存在瓦片")
-        self.skip_check.setChecked(True)
-        options.addWidget(self.skip_check)
-        options.addStretch(1)
-        form.addLayout(options, 1, 1, 1, 2)
-        layout.addLayout(form)
-
-        self.download_progress = QProgressBar()
-        self.download_progress.setRange(0, 1)
-        self.download_progress.setValue(0)
-        self.download_progress.setFormat("%p%")
-        self.download_progress.setTextVisible(False)
-        layout.addWidget(self.download_progress)
-
-        self.download_status = QLabel("尚未开始")
-        self.download_status.setObjectName("taskStatus")
-        self.download_status.setWordWrap(True)
-        self.download_status.setMinimumHeight(24)
-        layout.addWidget(self.download_status)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        self.btn_download_start = QPushButton("开始下载")
-        self.btn_download_start.setObjectName("primaryButton")
-        self.btn_download_stop = QPushButton("停止")
-        self.btn_download_stop.setObjectName("dangerButton")
-        self.btn_download_stop.setEnabled(False)
-        buttons.addWidget(self.btn_download_start, 2)
-        buttons.addWidget(self.btn_download_stop, 1)
-        layout.addLayout(buttons)
-        self.btn_task_manager = QPushButton("任务管理")
-        self.btn_task_manager.setObjectName("textButton")
-        self.btn_task_manager.clicked.connect(self._show_task_manager)
-        layout.addWidget(self.btn_task_manager)
-        return group
-
-    def _build_stitch_group(self) -> QGroupBox:
-        group = QGroupBox()
-        group.setObjectName("taskCard")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(6)
-
-        hint = QLabel("使用上方“瓦片范围”和级别，把瓦片目录中的切片拼接成一张图片。")
-        hint.setWordWrap(True)
-        hint.setObjectName("hintLabel")
-        layout.addWidget(hint)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(6)
-        form.addWidget(QLabel("瓦片目录"), 0, 0)
-        self.stitch_input_edit = QLineEdit()
-        self.stitch_input_edit.setPlaceholderText("包含 级别/行/列.png 的目录")
-        form.addWidget(self.stitch_input_edit, 0, 1)
-        self.btn_stitch_input_browse = QPushButton("…")
-        self.btn_stitch_input_browse.setObjectName("browseButton")
-        form.addWidget(self.btn_stitch_input_browse, 0, 2)
-
-        form.addWidget(QLabel("输出图片"), 1, 0)
-        self.stitch_output_edit = QLineEdit()
-        self.stitch_output_edit.setPlaceholderText("输出 PNG / JPG 路径")
-        form.addWidget(self.stitch_output_edit, 1, 1)
-        self.btn_stitch_output_browse = QPushButton("…")
-        self.btn_stitch_output_browse.setObjectName("browseButton")
-        form.addWidget(self.btn_stitch_output_browse, 1, 2)
-        layout.addLayout(form)
-
-        self.stitch_progress = QProgressBar()
-        self.stitch_progress.setRange(0, 1)
-        self.stitch_progress.setValue(0)
-        self.stitch_progress.setFormat("%p%")
-        self.stitch_progress.setTextVisible(False)
-        layout.addWidget(self.stitch_progress)
-
-        self.stitch_status = QLabel("尚未开始")
-        self.stitch_status.setObjectName("taskStatus")
-        self.stitch_status.setWordWrap(True)
-        self.stitch_status.setMinimumHeight(24)
-        layout.addWidget(self.stitch_status)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        self.btn_stitch_start = QPushButton("开始拼接")
-        self.btn_stitch_start.setObjectName("primaryButton")
-        self.btn_stitch_stop = QPushButton("停止")
-        self.btn_stitch_stop.setObjectName("dangerButton")
-        self.btn_stitch_stop.setEnabled(False)
-        buttons.addWidget(self.btn_stitch_start, 2)
-        buttons.addWidget(self.btn_stitch_stop, 1)
-        layout.addLayout(buttons)
-        return group
-
     def _build_log_group(self) -> QGroupBox:
         group, layout = self._make_card("运行日志")
         self.log_view = QPlainTextEdit()
@@ -694,12 +154,13 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1000)
         self.log_view.setFixedHeight(104)
-        self.log_view.setPlaceholderText("下载、拼接与错误信息会显示在这里")
+        self.log_view.setPlaceholderText("图源、图层切换及下载、拼接和错误信息会显示在这里")
         layout.addWidget(self.log_view)
         return group
 
     def _build_menus(self) -> None:
-        menu_bar = self.menuBar()
+        menu_bar = QMenuBar(self)
+        self._application_menu_bar = menu_bar
         menu_bar.setNativeMenuBar(False)
         menu_bar.setObjectName("appMenuBar")
         file_menu = menu_bar.addMenu("文件")
@@ -749,12 +210,17 @@ class MainWindow(QMainWindow):
             shortcut.activated.connect(lambda selected_menu=menu: self._open_app_menu(selected_menu))
             self._menu_shortcuts.append(shortcut)
             menu.menuAction().setToolTip(f"{menu.title()}（Alt+{key}）")
+        self._build_app_header(menu_bar)
 
     def _open_app_menu(self, menu: QMenu) -> None:
         menu_bar = self.menuBar()
         menu_bar.setActiveAction(menu.menuAction())
         if not menu.isVisible():
             menu.popup(menu_bar.mapToGlobal(menu_bar.actionGeometry(menu.menuAction()).bottomLeft()))
+
+    def _apply_api_key(self) -> None:
+        self.map.set_api_key(self.api_key_edit.text())
+        self._on_provider_changed()
 
     def _make_coord_spin(self, value: float, minimum: float, maximum: float) -> CoordinateSpinBox:
         spin = CoordinateSpinBox()
@@ -775,6 +241,9 @@ class MainWindow(QMainWindow):
     # 信号连接
     # ------------------------------------------------------------------
     def _connect_signals(self) -> None:
+        self.theme_combo.currentIndexChanged.connect(
+            lambda _index: self._theme_manager.set_mode(str(self.theme_combo.currentData()))
+        )
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self.grid_check.toggled.connect(self._on_grid_toggled)
@@ -819,6 +288,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _restore_settings(self) -> None:
         settings = self._settings
+        self._theme_manager.restore()
         geometry = settings.value("window/geometry")
         restored = False
         if geometry is not None:
@@ -829,6 +299,7 @@ class MainWindow(QMainWindow):
         splitter_state = settings.value("window/splitter")
         if splitter_state is not None:
             self._splitter.restoreState(splitter_state)
+        self._splitter.setHandleWidth(1)
 
         source_key = str(settings.value("map/source", DEFAULT_SOURCE_KEY) or DEFAULT_SOURCE_KEY)
         if source_key not in SOURCE_MAP:
@@ -919,6 +390,7 @@ class MainWindow(QMainWindow):
         settings.setValue("stitch/input", self.stitch_input_edit.text().strip())
         settings.setValue("stitch/output", self.stitch_output_edit.text().strip())
         settings.setValue("ui/log_visible", self.btn_toggle_log.isChecked())
+        settings.setValue("ui/theme", self._theme_manager.mode)
         settings.sync()
 
     def _get_bool(self, key: str, default: bool) -> bool:
@@ -992,7 +464,6 @@ class MainWindow(QMainWindow):
             preferred=self._last_provider_by_source.get(source_key),
         )
         self._on_provider_changed()
-        self._append_log(f"切换图源：{source.name}（{source.coordinate_system}）")
         self.statusBar().showMessage(
             f"已切换到 {source.name}（{source.coordinate_system}）；"
             "当前经纬度不会自动转换，请按图源坐标基准输入",
@@ -1030,6 +501,7 @@ class MainWindow(QMainWindow):
         key = self.provider_combo.currentData()
         if not key:
             return
+        previous_provider = self.map.provider
         try:
             self.map.set_provider(str(key))
         except ValueError:
@@ -1040,11 +512,15 @@ class MainWindow(QMainWindow):
 
         self.zoom_spin.setMaximum(provider.max_zoom)
         self.level_spin.setMaximum(provider.max_zoom)
+        self.level_slider.setMaximum(provider.max_zoom)
+        self._level_max_label.setText(f"{provider.max_zoom} · 近景")
         self.key_panel.setVisible(provider.requires_key)
         description = provider.description
         if provider.requires_key and not self.api_key_edit.text().strip():
             description = "中文卫星注记 · 先填写下方 Key，即可加载与下载。"
         self.layer_description.setText(description)
+        self.layer_choices.setToolTip(description)
+        self._refresh_layer_buttons()
 
         source = SOURCE_MAP.get(provider.source)
         source_name = source.name if source is not None else provider.source
@@ -1056,16 +532,13 @@ class MainWindow(QMainWindow):
         if provider.source == "google":
             tooltip += "\n需要能够访问 Google 的网络环境"
         self._provider_label.setToolTip(tooltip)
-        self.coord_hint.setText(
-            "点“开始框选”后在地图上点两个对角点，或直接输入 "
-            f"{provider.coordinate_system} 经纬度。"
-        )
-        if provider.source == "google" and provider.key != "google_satellite":
-            self.coord_hint.setText("Google 大陆道路/注记与卫星可能错位；框选坐标请以当前图层为准。")
         self._update_level_summary()
 
         if not self._loading_settings:
             self._maybe_update_default_output(provider)
+            if previous_provider.key != provider.key:
+                action = "切换图源" if previous_provider.source != provider.source else "切换图层"
+                self._append_log(f"{action}：{source_name} · {provider.name}（{provider.coordinate_system}）")
             self.statusBar().showMessage(f"地图图源：{source_name} · {provider.name}", 4000)
 
     def _on_grid_toggled(self, checked: bool) -> None:
@@ -1077,6 +550,7 @@ class MainWindow(QMainWindow):
 
     def _on_map_position(self, latitude: float, longitude: float) -> None:
         self._coord_label.setText(f"经度 {longitude:+.6f}   纬度 {latitude:+.6f}")
+        self._position_map_overlays()
 
     def _on_map_zoom_changed(self, zoom: int) -> None:
         with QSignalBlocker(self.zoom_spin):
@@ -1111,11 +585,9 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self.map.start_selection()
-        self._append_log("进入框选模式：请在地图上点击两个对角点")
 
     def _clear_selection(self) -> None:
         self.map.clear_selection()
-        self._append_log("已清除地图框选（瓦片范围保持不变）")
 
     def _use_current_view(self) -> None:
         if self._closing:
@@ -1142,15 +614,9 @@ class MainWindow(QMainWindow):
         coordinate_format = str(self.coord_format_combo.currentData())
         for spin in (self.north_spin, self.south_spin, self.west_spin, self.east_spin):
             spin.set_coordinate_format(coordinate_format)
-        self.coord_format_hint.setText(
-            "度分秒示例：23°36′00.000″ 或 23:36:00；南纬、西经用负数。"
-            if coordinate_format == "dms"
-            else "十进制度示例：23.600000；南纬、西经用负数。"
-        )
 
     def _on_region_changed(self, _index: int) -> None:
         preset = REGION_MAP.get(str(self.region_combo.currentData()))
-        self.region_hint.setVisible(preset is not None)
         if preset is None or self._range_locked:
             return
         self._applying_region_preset = True
@@ -1173,7 +639,6 @@ class MainWindow(QMainWindow):
             return
         with QSignalBlocker(self.region_combo):
             self.region_combo.setCurrentIndex(0)
-        self.region_hint.hide()
 
     def _on_extent_spin_changed(self, _value: float) -> None:
         if self._updating_range:
@@ -1272,12 +737,32 @@ class MainWindow(QMainWindow):
             return
         self._set_current_range(tile_range)
 
+    def _display_tile_count(self, count: int | None = None, *, levels: int | None = None,
+                            error: str = "", tooltip: str = "") -> None:
+        if count is None:
+            self.tile_count_label.setText(error or "—")
+            self.tile_count_detail.clear()
+        else:
+            value, unit = f"{count:,}", "张"
+            for divisor, suffix in ((10**12, "万亿张"), (10**8, "亿张"), (10**4, "万张")):
+                if count >= divisor:
+                    value = f"{count / divisor:,.2f}".rstrip("0").rstrip(".")
+                    unit = suffix
+                    break
+            self.tile_count_label.setText(value)
+            detail = f"{unit} · {levels} 级" if levels is not None else unit
+            self.tile_count_detail.setText(f"{detail} · {error}" if error else detail)
+            exact = f"{count:,} 张" + (f" · {levels} 级" if levels is not None else "")
+            tooltip = f"{exact}\n{tooltip}".rstrip()
+        set_state(self.tile_count_label, "state", "error" if error else "")
+        self.tile_count_card.setToolTip(tooltip)
+        self.tile_count_label.setToolTip(tooltip)
+        self.tile_count_detail.setToolTip(tooltip)
+
     def _set_invalid_range(self, message: str) -> None:
         self._range = None
         self.image_size_label.clear()
-        self.tile_count_label.setText("范围无效")
-        self.tile_count_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 14px; font-weight: 600;")
-        self.tile_count_label.setToolTip(message)
+        self._display_tile_count(error="范围无效", tooltip=message)
         self._update_level_summary()
 
     def _set_current_range(self, tile_range: TileRange) -> None:
@@ -1285,23 +770,12 @@ class MainWindow(QMainWindow):
             self._range = None
             self.image_size_label.clear()
             limit = (1 << tile_range.zoom) - 1
-            self.tile_count_label.setText(f"{tile_range.count:,} 张 · 超出范围")
-            self.tile_count_label.setStyleSheet(f"color: {COLORS['error']}; font-size: 14px; font-weight: 600;")
-            self.tile_count_label.setToolTip(f"Z{tile_range.zoom} 的有效行/列范围是 0 ~ {limit}")
+            self._display_tile_count(tile_range.count, error="超出范围",
+                                     tooltip=f"Z{tile_range.zoom} 的有效行/列范围是 0 ~ {limit}")
             self._update_level_summary()
             return
 
         self._range = tile_range
-        self.image_size_label.setText(
-            f"拼接尺寸  {tile_range.pixel_width:,} × {tile_range.pixel_height:,} px"
-        )
-        self.tile_count_label.setText(f"{tile_range.count:,} 张")
-        self.tile_count_label.setStyleSheet("")
-        self.tile_count_label.setToolTip(
-            f"行 {tile_range.min_row} ~ {tile_range.max_row}，"
-            f"列 {tile_range.min_col} ~ {tile_range.max_col}\n"
-            f"预计拼接尺寸：{tile_range.pixel_width:,} × {tile_range.pixel_height:,} 像素"
-        )
         self._update_level_summary()
 
     def _on_multi_levels_changed(self, checked: bool) -> None:
@@ -1322,30 +796,28 @@ class MainWindow(QMainWindow):
         return ranges_for_levels(levels, bounds, self._range)
 
     def _update_level_summary(self, *_args) -> None:
+        with QSignalBlocker(self.level_slider):
+            self.level_slider.setValue(self.level_spin.value())
         self.download_size_label.clear()
         self.download_size_label.setToolTip("")
         if not self.multi_level_check.isChecked():
             self.download_plan_label.clear()
             self.multi_levels_panel.hide()
             if self._range is not None:
-                self.tile_count_label.setText(f"{self._range.count:,} 张")
-                self.tile_count_label.setStyleSheet("")
                 self.image_size_label.setText(
-                    f"拼接尺寸  {self._range.pixel_width:,} × {self._range.pixel_height:,} px"
+                    f"{self._range.pixel_width:,} × {self._range.pixel_height:,} px"
                 )
-                self.tile_count_label.setToolTip(
+                self._display_tile_count(self._range.count, tooltip=(
                     f"行 {self._range.min_row} ~ {self._range.max_row}，列 {self._range.min_col} ~ {self._range.max_col}\n"
                     f"拼接 {self._range.pixel_width:,} × {self._range.pixel_height:,} px"
-                )
+                ))
                 self._update_download_estimate((self._range,))
             return
         try:
             ranges = self._selected_download_ranges()
             total = sum(item.count for item in ranges)
-            self.tile_count_label.setText(f"{total:,} 张 · {len(ranges)} 级")
-            self.tile_count_label.setStyleSheet("")
-            self.image_size_label.setText(f"按 Z{format_levels(item.zoom for item in ranges)} 从低到高依次下载")
-            self.tile_count_label.setToolTip("\n".join(
+            self.image_size_label.setText(f"Z{format_levels(item.zoom for item in ranges)}\n逐级拼接")
+            self._display_tile_count(total, levels=len(ranges), tooltip="\n".join(
                 f"Z{item.zoom}：{item.count:,} 张；拼接 {item.pixel_width:,} × {item.pixel_height:,} px"
                 for item in ranges
             ))
@@ -1363,7 +835,7 @@ class MainWindow(QMainWindow):
     def _update_download_estimate(self, ranges: tuple[TileRange, ...]) -> None:
         provider = self.map.provider
         estimated = estimate_download_bytes(provider, ranges)
-        self.download_size_label.setText(f"预计下载 ≈ {format_bytes(estimated)}")
+        self.download_size_label.setText(f"≈ {format_bytes(estimated)}")
         details = [
             f"Z{item.zoom}：{item.count:,} 张 × 约 {format_bytes(estimated_tile_bytes(provider, item.zoom))}"
             f" ≈ {format_bytes(estimate_download_bytes(provider, (item,)))}"
@@ -1533,7 +1005,8 @@ class MainWindow(QMainWindow):
         try:
             tasks = self._task_store.list_groups()
             unfinished = sum(task["status"] != "completed" for task in tasks)
-            self.btn_task_manager.setText(f"任务管理  ·  {len(tasks)} 个任务 / {unfinished} 个未完成")
+            self.btn_task_manager.setText(f"任务管理 · {len(tasks)}")
+            self.btn_task_manager.setToolTip(f"{len(tasks)} 个任务，{unfinished} 个未完成；Ctrl+J 打开")
         except Exception as exc:
             self.btn_task_manager.setToolTip(str(exc))
 
@@ -1733,6 +1206,8 @@ class MainWindow(QMainWindow):
 
     def _set_download_running(self, running: bool) -> None:
         common_locked = [
+            self.layer_choices,
+            self.level_slider,
             self.region_combo,
             self.coord_format_combo,
             self.multi_level_check,
@@ -1926,6 +1401,8 @@ class MainWindow(QMainWindow):
 
     def _set_stitch_running(self, running: bool) -> None:
         common_locked = [
+            self.layer_choices,
+            self.level_slider,
             self.region_combo,
             self.coord_format_combo,
             self.multi_level_check,
@@ -2053,7 +1530,7 @@ class MainWindow(QMainWindow):
             "<li>在右侧选择图源与图层；需要地名、道路请选择 <b>卫星 + 标注</b>。</li>"
             "<li>点击 <b>开始框选</b>，在地图上点击两个对角点；"
             "也可直接输入经纬度，或点击 <b>当前视野</b>。</li>"
-            "<li>选择“当前级别 Z”，确认瓦片范围；多级下载时数量为全部级别的合计。</li>"
+            "<li>选择“缩放级别 Z”，确认瓦片范围；多级下载时数量为全部级别的合计。</li>"
             "<li>需要多个级别时，勾选 <b>多级连续下载</b>，输入如 <b>10-14, 16</b>；程序会依次下载。</li>"
             "<li>选择输出目录，点击 <b>开始下载</b>。</li>"
             "<li>在“拼接”中选择瓦片目录和输出图片，点击 <b>开始拼接</b>。</li>"
@@ -2111,14 +1588,9 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
 
     def _set_task_status(self, label: QLabel, text: str, kind: str) -> None:
-        colors = {
-            "normal": COLORS["on_surface_variant"],
-            "busy": COLORS["primary"],
-            "ok": COLORS["success"],
-            "error": COLORS["error"],
-        }
-        label.setStyleSheet(f"color: {colors.get(kind, COLORS['on_surface_variant'])};")
+        set_state(label, "statusKind", kind)
         label.setText(text)
+        QTimer.singleShot(0, self._adjust_task_height)
 
     # ------------------------------------------------------------------
     # 关闭流程

@@ -34,6 +34,7 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=1480)
     parser.add_argument("--height", type=int, default=940)
     parser.add_argument("--tab", type=int, default=0)
+    parser.add_argument("--theme", choices=("light", "dark", "system"), default="light")
     parser.add_argument("--tasks", action="store_true", help="截取任务管理窗口")
     parser.add_argument("--menu", choices=("file", "tools", "help"), help="同时截取展开的菜单")
     parser.add_argument("--levels", default="", help="显示多级连续下载设置，例如 10-12,14")
@@ -48,6 +49,7 @@ def main() -> int:
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(settings_dir))
     QSettings().clear()
+    QSettings().setValue("ui/theme", args.theme)
     apply_theme(app)
 
     window = MainWindow()

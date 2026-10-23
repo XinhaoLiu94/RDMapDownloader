@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from .config import APP_NAME, APP_TITLE
 from .main_window import MainWindow
 from .paths import resource_path
-from .theme import apply_theme
+from .theme import theme_manager
 
 
 def _install_excepthook() -> None:
@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName(APP_NAME)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_TITLE)
-    apply_theme(app)
+    theme_manager(app)
 
     icon_path = resource_path("assets/icon.png")
     if icon_path.is_file():

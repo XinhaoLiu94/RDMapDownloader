@@ -53,6 +53,15 @@ def world_size(zoom: int) -> float:
     return float(TILE_SIZE * tile_count(zoom))
 
 
+def map_scale(latitude: float, zoom: int, target_pixels: int = 100) -> tuple[float, float]:
+    """返回地图中心纬度处比例尺的地面米数和像素宽度（1/2/5 整数档）。"""
+    meters_per_pixel = 2 * math.pi * 6_378_137 * math.cos(math.radians(clamp_latitude(latitude))) / world_size(zoom)
+    target_meters = meters_per_pixel * max(1, target_pixels)
+    power = 10 ** math.floor(math.log10(target_meters))
+    meters = max(value * power for value in (1, 2, 5) if value * power <= target_meters)
+    return meters, meters / meters_per_pixel
+
+
 def lon_to_pixel_x(longitude: float, zoom: int) -> float:
     return (float(longitude) + 180.0) / 360.0 * world_size(zoom)
 

@@ -127,6 +127,27 @@ class MainWindowSmokeTests(unittest.TestCase):
         self.assertFalse(self.window.log_group.isVisible())
         self.assertFalse(self.window.btn_toggle_log.isChecked())
 
+    def test_log_records_source_and_layer_changes_without_navigation_noise(self) -> None:
+        self.assertEqual(self.window.log_view.toPlainText(), "")
+        self.window.map.set_zoom(11)
+        self.window.map.set_center(23.2, 113.2)
+        self.window._begin_selection()
+        self.window._clear_selection()
+        self.assertEqual(self.window.log_view.toPlainText(), "")
+
+        self.window._layer_buttons["satellite"].click()
+        lines = self.window.log_view.toPlainText().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("切换图层：高德地图 · 影像", lines[0])
+        self.window._on_provider_changed()
+        self.window._apply_api_key()
+        self.assertEqual(self.window.log_view.toPlainText().splitlines(), lines)
+
+        self.window.source_combo.setCurrentIndex(self.window.source_combo.findData("google"))
+        lines = self.window.log_view.toPlainText().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("切换图源：Google 地图 · 卫星", lines[1])
+
     def test_menu_keyboard_navigation_and_action_shortcuts(self) -> None:
         for action, key in zip(self.window.menuBar().actions(), (Qt.Key_F, Qt.Key_T, Qt.Key_H)):
             menu = action.menu()
@@ -159,7 +180,7 @@ class MainWindowSmokeTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertEqual(self.window.map.provider.key, "google_satellite")
-        self.assertIn("WGS-84", self.window.coord_hint.text())
+        self.assertIn("WGS-84", self.window._provider_label.text())
         self.assertIn("Google", self.window._provider_label.text())
         self.assertEqual(self.window.map.provider.attribution, "© Google")
         self.assertEqual(Path(self.window.download_dir_edit.text()).name, "google_satellite")
@@ -175,7 +196,7 @@ class MainWindowSmokeTests(unittest.TestCase):
         self.window.source_combo.setCurrentIndex(amap_index)
         self.app.processEvents()
         self.assertEqual(self.window.map.provider.key, "amap_hybrid")
-        self.assertIn("GCJ-02", self.window.coord_hint.text())
+        self.assertIn("GCJ-02", self.window._provider_label.text())
 
     def test_google_settings_roundtrip(self) -> None:
         self.window.source_combo.setCurrentIndex(
@@ -198,7 +219,7 @@ class MainWindowSmokeTests(unittest.TestCase):
         self.window.source_combo.setCurrentIndex(self.window.source_combo.findData("tianditu"))
         self.assertEqual(self.window.map.provider.key, "tianditu_hybrid")
         self.assertTrue(self.window.key_panel.isVisible())
-        self.assertIn("CGCS2000", self.window.coord_hint.text())
+        self.assertIn("CGCS2000", self.window._provider_label.text())
         self.window.map.set_zoom(20)
         self.assertEqual(self.window.map.zoom, 18)
         self.assertEqual(self.window.level_spin.maximum(), 18)

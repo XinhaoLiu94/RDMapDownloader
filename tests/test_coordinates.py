@@ -168,7 +168,6 @@ class RegionWindowTests(unittest.TestCase):
         self.assertEqual(self.window.coord_format_combo.currentData(), "dms")
         self.assertEqual(self.window.region_combo.currentData(), "")
         self.assertEqual(self.window.region_combo.currentText(), "自定义区域")
-        self.assertTrue(self.window.region_hint.isHidden())
         self.assertIsNone(self.window.map.selection_bounds)
         self.assertEqual(self.window._extent_values(), REGION_MAP["australia"].bounds)
         self.assertEqual(self.window.north_spin.text(), "-10°30′00.000″")
