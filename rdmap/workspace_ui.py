@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QGraphicsDropShadowEffect, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMenuBar, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
     QSlider, QSpinBox, QSplitter, QStatusBar, QTabWidget, QToolBar, QToolButton,
-    QVBoxLayout, QWidget,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .config import (
@@ -65,7 +65,9 @@ class WorkspaceUi:
             widget.setAttribute(Qt.WA_TransparentForMouseEvents)
         self._build_statusbar()
         self.map.installEventFilter(self)
-        self._splitter.addWidget(map_frame)
+        self.map_stack = QStackedWidget(self)
+        self.map_stack.addWidget(map_frame)
+        self._splitter.addWidget(self.map_stack)
         self._splitter.addWidget(self._build_side_panel())
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 0)
@@ -88,12 +90,24 @@ class WorkspaceUi:
         row.addWidget(title)
         menu_bar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         row.addWidget(menu_bar, 0, Qt.AlignVCenter)
+        self.mode_buttons = {}
+        self.mode_group = QButtonGroup(self)
+        for mode, text in (("2d", "2D"), ("3d", "3D")):
+            button = QToolButton()
+            button.setText(text)
+            button.setCheckable(True)
+            button.setChecked(mode == "2d")
+            button.setFixedSize(42, 30)
+            button.setToolTip("二维地图" if mode == "2d" else "三维地形 · Cesium · WGS84")
+            self.mode_group.addButton(button)
+            self.mode_buttons[mode] = button
+            row.addWidget(button)
         row.addStretch(1)
         self._provider_label.setObjectName("sourceBadge")
-        self._provider_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._provider_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._provider_label.setMaximumWidth(420)
         self._provider_label.setFixedHeight(30)
-        row.addWidget(self._provider_label)
+        row.addWidget(self._provider_label, 1)
         self.theme_combo = QComboBox()
         self.theme_combo.setObjectName("themeCombo")
         self.theme_combo.setAccessibleName("外观模式")
@@ -633,5 +647,7 @@ class WorkspaceUi:
         self._download_folder_action.setIcon(icon("folder"))
         self._refresh_layer_buttons(refresh_icons=True)
         self.map.update()
+        if self._cesium is not None:
+            self._cesium.set_theme()
         QTimer.singleShot(0, self._position_map_overlays)
         QTimer.singleShot(0, self._adjust_task_height)

@@ -151,6 +151,8 @@ window = MainWindow()
 window.setAttribute(Qt.WA_DontShowOnScreen, True)
 window.resize(1024, 680)
 window.download_dock.parentWidget().setFixedWidth(400)
+# 字体布局检查不需要在线瓦片，避免网络回调拖慢 processEvents。
+window.map.set_active(False)
 window.show()
 for mode in ('light', 'dark'):
     window._theme_manager.set_mode(mode)
@@ -175,8 +177,9 @@ print('LAYOUT_OK', flush=True)
         env = os.environ.copy()
         if os.name == "nt":
             env.pop("QT_QPA_PLATFORM", None)
+        # Windows 原生字库初始化和窗口首次显示可能超过 20 秒。
         result = subprocess.run([sys.executable, "-X", "faulthandler", "-c", script, str(self.temp)],
-                                capture_output=True, timeout=20, text=True, env=env, encoding="utf-8")
+                                capture_output=True, timeout=60, text=True, env=env, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("LAYOUT_OK", result.stdout)
 

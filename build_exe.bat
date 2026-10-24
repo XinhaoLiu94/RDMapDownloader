@@ -2,6 +2,12 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+rem 使用 build_exe.bat 3d 时包含可选的三维组件。
+if /i "%~1"=="3d" (
+    python -m pip install -r requirements-3d.txt
+    if errorlevel 1 exit /b 1
+)
+
 python -m pip show pyinstaller >nul 2>nul
 if errorlevel 1 (
     echo 正在安装 PyInstaller...

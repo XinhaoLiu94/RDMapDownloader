@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
 
     QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     try:
         from PyQt5.QtGui import QGuiApplication
 

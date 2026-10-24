@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="viewer.css">
+<script src="compat.js"></script><script>window.CESIUM_BASE_URL=new URL('cesium/',location.href).href;</script>
+<script src="cesium/Cesium.js"></script><script src="qrc:///qtwebchannel/qwebchannel.js"></script></head>
+<body><div id="globe"></div>
+<div class="tools"><span>WGS84 · 3D</span><button id="reset">复位视图</button><button id="north">北向上</button><button id="tilt">倾斜视角</button><button id="minus" aria-label="缩小">−</button><button id="plus" aria-label="放大">＋</button></div>
+<div class="guide">左键平移 · 滚轮缩放 · 中键拖动旋转</div>
+<div id="drawing" hidden>在地表点击两个对角点，Esc 取消</div>
+<div id="coordinates">经度 --　纬度 --</div>
+<script src="viewer.js"></script></body></html>

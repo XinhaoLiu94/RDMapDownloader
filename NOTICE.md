@@ -25,6 +25,9 @@ RDMapDownloader 的 Python 实现及本项目原创资源采用 **GNU General Pu
 - [PyQt5](https://www.riverbankcomputing.com/software/pyqt/)：本项目按其开源 GPL v3 条款使用。
   Qt 库自身亦有独立许可要求，参见 [Qt 许可说明](https://www.qt.io/licensing/)。
 - [Requests](https://requests.readthedocs.io/)：Apache License 2.0。
+- 可选 [PyQtWebEngine](https://www.riverbankcomputing.com/software/pyqtwebengine/)：按 GPL v3 使用；Qt WebEngine 和 Chromium 的第三方许可独立适用。
+- [CesiumJS 1.117](https://github.com/CesiumGS/cesium/tree/1.117)：Apache License 2.0；运行时从官方发布地址按需缓存，
+  版权与许可证见其 [LICENSE.md](https://github.com/CesiumGS/cesium/blob/1.117/LICENSE.md)。保留地图视图中的数据署名。
 - 打包、图标生成等开发工具以各自许可证为准；发布可执行文件时，仍需保留随附依赖的版权和许可文件。
 
 ## 图源与地图数据
@@ -35,3 +38,8 @@ RDMapDownloader 的 Python 实现及本项目原创资源采用 **GNU General Pu
 
 常用区域的近似矩形范围参考 [Natural Earth 国家数据](https://www.naturalearthdata.com/downloads/110m-cultural-vectors/110m-admin-0-countries/)，
 用于快速框选，不表示行政边界，也不进行国界裁剪。
+
+3D 高程来自 [Mapzen Skadi / Joerd](https://github.com/tilezen/joerd/blob/master/docs/attribution.md)，
+融合 SRTM、GMTED、ETOPO 等不同地区的数据；其来源、分辨率和许可随地区而异，请保留相应署名。
+EGM96 大地水准面格网从 [OSGeo PROJ 数据分发站](https://download.osgeo.org/proj/vdatum/egm96_15/)按需缓存。
+这些高程和影像数据不适用本项目的 GPL 许可。

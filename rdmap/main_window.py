@@ -55,6 +55,8 @@ from .tasks import TaskStore
 from .task_manager import TaskManagerDialog
 from .theme import set_state, theme_manager
 from .workspace_ui import WorkspaceUi
+from .map_modes import MapModes
+from .terrain_server import supports_3d
 from .paths import directory_size, format_bytes, format_duration, resource_path
 from .providers import (
     DEFAULT_SOURCE_KEY,
@@ -88,7 +90,11 @@ MAX_TILE_WARNING = 20_000
 MAX_TILE_HARD_LIMIT = 1_000_000
 
 
-class MainWindow(WorkspaceUi, QMainWindow):
+if QApplication.instance() is None:
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+
+
+class MainWindow(MapModes, WorkspaceUi, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._settings = QSettings()
@@ -104,6 +110,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self._closing = False
         self._allow_close = False
         self._loading_settings = True
+        self._init_mode_state()
         self._last_provider_by_source: dict[str, str] = {}
         self._download_task_id: str | None = None
         self._download_queue: list[tuple[DownloadOptions, str]] = []
@@ -141,6 +148,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self._restore_settings()
         self._theme_manager.changed.connect(self._on_theme_changed)
         self._on_theme_changed()
+        self._restore_mode_settings()
         self._refresh_task_summary()
         self.statusBar().showMessage("就绪")
 
@@ -241,6 +249,8 @@ class MainWindow(WorkspaceUi, QMainWindow):
     # 信号连接
     # ------------------------------------------------------------------
     def _connect_signals(self) -> None:
+        for mode, button in self.mode_buttons.items():
+            button.clicked.connect(lambda _checked=False, value=mode: self._set_map_mode(value))
         self.theme_combo.currentIndexChanged.connect(
             lambda _index: self._theme_manager.set_mode(str(self.theme_combo.currentData()))
         )
@@ -391,6 +401,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         settings.setValue("stitch/output", self.stitch_output_edit.text().strip())
         settings.setValue("ui/log_visible", self.btn_toggle_log.isChecked())
         settings.setValue("ui/theme", self._theme_manager.mode)
+        self._save_mode_settings()
         settings.sync()
 
     def _get_bool(self, key: str, default: bool) -> bool:
@@ -436,6 +447,8 @@ class MainWindow(WorkspaceUi, QMainWindow):
         if source is None:
             return
         providers = providers_for_source(source_key)
+        if self._view_mode == "3d":
+            providers = tuple(provider for provider in providers if supports_3d(provider))
         provider_keys = {provider.key for provider in providers}
         target_key = preferred if preferred in provider_keys else source.default_provider_key
 
@@ -535,6 +548,9 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self._update_level_summary()
 
         if not self._loading_settings:
+            self._remember_geographic_selection()
+            if self._view_mode == "3d" and self._cesium is not None:
+                self._cesium.set_source(provider)
             self._maybe_update_default_output(provider)
             if previous_provider.key != provider.key:
                 action = "切换图源" if previous_provider.source != provider.source else "切换图层"
@@ -564,6 +580,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
 
     def _on_map_selection(self, north: float, south: float, west: float, east: float) -> None:
         self._set_extent_values(north, south, west, east, sync_map=False)
+        self._remember_geographic_selection(True)
         self._append_log("框选范围：" + format_bounds(north, south, west, east))
         self.statusBar().showMessage("框选完成，已更新瓦片范围", 5000)
 
@@ -574,7 +591,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
             self.btn_clear_draw.setText("取消框选")
             self.statusBar().showMessage("框选模式：请在地图上点击两个对角点（Esc 取消）")
         else:
-            self.btn_draw.setEnabled(True)
+            self.btn_draw.setEnabled(not self._range_locked)
             self.btn_draw.setText("开始框选")
             self.btn_clear_draw.setText("清空框选")
 
@@ -582,21 +599,34 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self.statusBar().showMessage("已清除地图框选", 4000)
 
     def _begin_selection(self) -> None:
-        if self._closing:
+        if self._closing or self._range_locked:
+            return
+        if self._view_mode == "3d":
+            self._cesium.begin_selection()
             return
         self.map.start_selection()
 
     def _clear_selection(self) -> None:
         self.map.clear_selection()
+        self._selection_visible = False
+        if self._cesium is not None:
+            self._cesium.command("cancelSelection")
+            self._cesium.command("setSelection", None)
 
     def _use_current_view(self) -> None:
         if self._closing:
+            return
+        if self._view_mode == "3d":
+            self._cesium.command("useCurrentView")
             return
         north, south, west, east = self.map.visible_bounds()
         self._set_extent_values(north, south, west, east, sync_map=True)
         self.statusBar().showMessage("已用当前地图视野更新框选范围", 5000)
 
     def _locate_tile_range(self) -> None:
+        if self._view_mode == "3d":
+            self._mode_fly_to_range()
+            return
         north = self.north_spin.value()
         south = self.south_spin.value()
         west = self.west_spin.value()
@@ -630,6 +660,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
             x2, y2 = latlng_to_pixel(preset.south, preset.east, zoom)
             latitude, longitude = pixel_to_latlng((x1 + x2) / 2, (y1 + y2) / 2, zoom)
             self.map.set_center(latitude, longitude)
+            self._mode_fly_to_range()
         finally:
             self._applying_region_preset = False
         self.statusBar().showMessage(f"已选择{preset.name}，可调整四至和下载级别", 5000)
@@ -651,6 +682,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
             self.west_spin.value(),
             self.east_spin.value(),
         )
+        self._remember_geographic_selection(True)
 
     def _on_level_changed(self, value: int) -> None:
         if self._updating_range:
@@ -663,6 +695,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
             return
         self._mark_region_custom()
         self._refresh_tile_range_from_spins()
+        self._manual_range_dirty = True
 
     def _set_extent_values(
         self,
@@ -693,6 +726,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
                 self.west_spin.value(),
                 self.east_spin.value(),
             )
+            self._remember_geographic_selection(True)
 
     def _update_tile_range(self) -> None:
         if self._updating_range:
@@ -777,6 +811,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
 
         self._range = tile_range
         self._update_level_summary()
+        self._remember_geographic_selection()
 
     def _on_multi_levels_changed(self, checked: bool) -> None:
         self.multi_levels_panel.setVisible(checked)
@@ -861,7 +896,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         if self._stitch_worker is not None:
             QMessageBox.information(self, "请稍候", "拼接任务正在进行，请等待完成后再开始下载。")
             return
-        if self.map.selection_mode:
+        if self._selection_active():
             QMessageBox.information(self, "框选未完成", "请先完成框选，或按 Esc 取消框选。")
             return
 
@@ -1047,6 +1082,8 @@ class MainWindow(WorkspaceUi, QMainWindow):
                 raise ValueError("任务级别超过该图源当前支持的最大级别。")
             output_dir = Path(task["output_dir"])
             output_dir.mkdir(parents=True, exist_ok=True)
+            if self._view_mode == "3d" and not supports_3d(provider):
+                self._set_map_mode("2d")
             with QSignalBlocker(self.source_combo):
                 self.source_combo.setCurrentIndex(self.source_combo.findData(provider.source))
             self._populate_provider_combo(provider.source, preferred=provider.key)
@@ -1058,6 +1095,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
             south, east = tile_to_latlng(tile_range.max_col + 1, tile_range.max_row + 1, tile_range.zoom)
             self._set_extent_values(north, south, west, east, sync_map=True)
             self.map.show_bounds(north, south, west, east, zoom=tile_range.zoom)
+            self._mode_fly_to_range()
             for spin, value in ((self.row_min_spin, tile_range.min_row), (self.row_max_spin, tile_range.max_row),
                                 (self.col_min_spin, tile_range.min_col), (self.col_max_spin, tile_range.max_col)):
                 with QSignalBlocker(spin):
@@ -1241,6 +1279,8 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self.btn_download_stop.setEnabled(running)
         self.act_use_view.setEnabled(not running)
         self._range_locked = running or self._stitch_worker is not None
+        if self._cesium is not None:
+            self._cesium.command("setEnabled", not self._range_locked)
         if running:
             self.btn_stitch_start.setEnabled(False)
         else:
@@ -1255,7 +1295,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         if self._download_worker is not None:
             QMessageBox.information(self, "请稍候", "下载任务正在进行，请等待完成后再开始拼接。")
             return
-        if self.map.selection_mode:
+        if self._selection_active():
             QMessageBox.information(self, "框选未完成", "请先完成框选，或按 Esc 取消框选。")
             return
 
@@ -1436,6 +1476,8 @@ class MainWindow(WorkspaceUi, QMainWindow):
         self.btn_stitch_stop.setEnabled(running)
         self.act_use_view.setEnabled(not running)
         self._range_locked = running or self._download_worker is not None
+        if self._cesium is not None:
+            self._cesium.command("setEnabled", not self._range_locked)
         if running:
             self.btn_download_start.setEnabled(False)
         else:
@@ -1616,6 +1658,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._allow_close:
             self._save_settings()
+            self._shutdown_map_modes()
             event.accept()
             return
 
@@ -1626,6 +1669,7 @@ class MainWindow(WorkspaceUi, QMainWindow):
         ]
         if not active:
             self._save_settings()
+            self._shutdown_map_modes()
             event.accept()
             return
 

@@ -3,8 +3,8 @@
 基于 **Python 3 + PyQt5** 重写的多图源地图瓦片下载与拼接工具，功能对应原 C# / WinForms / GMap.NET 项目
 [GMapDownloader](https://github.com/hejustbrave/GMapDownloader)。支持 **高德、Google、天地图、Esri** 四组图源。
 
-原程序依赖 GMap.NET 控件；本版本使用 QPainter 自绘瓦片地图，运行时只依赖 **PyQt5** 和 **requests**，
-不需要 GDAL、Python 地图框架或 .NET 环境。
+原程序依赖 GMap.NET 控件；本版本的 2D 使用 QPainter 自绘瓦片地图，依赖 **PyQt5** 和 **requests**。
+可选的 3D 使用 **Qt WebEngine + CesiumJS**，不需要 Unity、GDAL 或 .NET 环境。
 
 项目地址：[XinhaoLiu94/RDMapDownloader](https://github.com/XinhaoLiu94/RDMapDownloader)。
 本项目的 Python 实现采用 [GPL-3.0-only](LICENSE)，来源、第三方组件与地图数据的权利说明见 [NOTICE.md](NOTICE.md)。
@@ -13,6 +13,8 @@
 
 ## 功能
 
+- **2D / 3D 切换**：2D 保留各图源的原生坐标，3D 使用 WGS84 卫星影像与真实高程；分别保存图源、视图和相机。
+  同一选区切换时转换坐标，保留原始边界，避免反复切换导致范围扩大；现有下载任务参数独立保存。
 - **双主题工作区**：暖白／炭黑底色配绿色强调色，顶部导航、悬浮地图工具、图层缩略卡与分区面板；
   下载／拼接操作固定在右侧底部，滚动设置时仍可直接开始或停止任务。
 - **外观切换**：顶部可选择浅色、深色或自动跟随系统，即时生效并记住选择；菜单、任务管理、弹窗和图标同步调整。
@@ -60,6 +62,33 @@ python main.py
 ```
 
 也可以直接双击 [run.bat](run.bat)，脚本会在缺少依赖时自动安装。
+
+需要三维地形时，先安装可选依赖：
+
+```powershell
+python -m pip install -r requirements-3d.txt
+```
+
+### 三维地图
+
+顶部 **2D / 3D** 切换渲染模式。2D 默认高德 GCJ-02；3D 默认 Esri 卫星加标注，
+也可选择 Esri 纯影像或 Google 纯卫星。Google 的大陆道路混合注记不参与 3D，避免叠加偏移。
+在三维视图左键拖动、滚轮缩放、中键拖动旋转，点击“倾斜视角”查看地形起伏。
+右侧仍可框选、输入经纬度、使用当前视野或常用区域，并通过原有任务管理下载和拼接影像。
+两种模式分别记住图源和视图；选区有改动时，另一模式使用转换后的范围。
+
+首次进入 3D 需要联网下载 Cesium 组件，运行资源按需缓存。为兼容 Qt 5 WebEngine 的 Chromium，
+当前固定为已验证的 CesiumJS 1.117，主脚本校验 SHA-256，不依赖 Cesium ion 账号或 token。
+本机服务仅监听 `127.0.0.1`，使用随机端口和随机路径；退出时关闭。
+
+高程使用 [Mapzen Skadi HGT](https://github.com/tilezen/joerd/blob/master/docs/formats.md)，
+其水平基准是 WGS84，垂直基准是 EGM96。加载
+[EGM96 格网](https://download.osgeo.org/proj/vdatum/egm96_15/)后，按 `椭球高 = 海拔 + 大地水准面起伏`
+转换，再供 Cesium 渲染。远景使用椭球近似，放大到地形级别 9 起按需加载真实高程，最高细分到 15；
+原始高程分辨率不会因为放大而提高。无高程覆盖或网络失败时显示加载错误，不会用随机高度替代。
+
+当前 3D 是**卫星贴图加地形预览**，不包含城市建筑模型；DEM 缓存尚未加入下载任务管理，也不提供高程/三维模型导出。
+GCJ-02 与 WGS84 转换采用常用数值近似，用于视图衔接；CGCS2000 在切换时仅作近似定位，均不作为测绘基准转换。
 
 ## 使用步骤
 
@@ -235,6 +264,9 @@ python -m unittest discover -s tests -v
 ## 打包为 exe
 
 已提供图标 [assets/icon.ico](assets/icon.ico) 和打包脚本 [build_exe.bat](build_exe.bat)：
+
+包含三维组件时运行 `build_exe.bat 3d`；脚本会先安装可选依赖，PyInstaller 自动收集 Qt WebEngine。
+Cesium 资源仍在首次运行时下载，打包时不包含地图与高程数据。
 
 ```powershell
 python -m pip install pyinstaller

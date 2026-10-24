@@ -101,6 +101,7 @@ class TileMapWidget(QWidget):
         self._inflight: dict[QNetworkReply, tuple[tuple[str, int, int, int], int]] = {}
         self._tile_parts: dict[tuple[str, int, int, int], list[bytes | None]] = {}
         self._api_key = ""
+        self._active = True
 
         self._nam = QNetworkAccessManager(self)
         try:
@@ -159,6 +160,20 @@ class TileMapWidget(QWidget):
         self._provider = provider
         self.set_zoom(self._zoom)
         self.update()
+
+    def set_active(self, active: bool) -> None:
+        """隐藏/关闭视图时停止预览请求，下载任务由独立 worker 管理。"""
+        self._active = bool(active)
+        if not self._active:
+            self._queue.clear()
+            self._pending.clear()
+            self._tile_parts.clear()
+            replies = list(self._inflight)
+            self._inflight.clear()
+            for reply in replies:
+                reply.abort()
+        else:
+            self.update()
 
     def set_api_key(self, api_key: str) -> None:
         if self._api_key == api_key.strip():
@@ -371,6 +386,8 @@ class TileMapWidget(QWidget):
         return None
 
     def _enqueue_tile(self, key: tuple[str, int, int, int]) -> None:
+        if not self._active:
+            return
         if key in self._pending or key in self._mem_cache:
             return
         provider_key, zoom, col, row = key
@@ -384,6 +401,8 @@ class TileMapWidget(QWidget):
         self._pump_queue()
 
     def _pump_queue(self) -> None:
+        if not self._active:
+            return
         while self._queue and len(self._inflight) < self.MAX_INFLIGHT:
             key, layer_index, url = self._queue.popleft()
             if key not in self._tile_parts:
@@ -406,6 +425,9 @@ class TileMapWidget(QWidget):
 
     def _on_tile_reply(self, reply: QNetworkReply) -> None:
         request_info = self._inflight.pop(reply, None)
+        if request_info is None:
+            reply.deleteLater()
+            return
         error = reply.error()
         status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
         data = reply.readAll()
