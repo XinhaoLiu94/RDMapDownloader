@@ -225,9 +225,11 @@ class ResourceStore:
 
 
 class TerrainServer:
-    def __init__(self, store: ResourceStore, report=None):
+    def __init__(self, store: ResourceStore, report=None, engine: str = "cesium"):
         self.store = store
         self.report = report or (lambda text: None)
+        self.engine = engine if engine in ("cesium", "mars3d") else "cesium"
+        self.index_name = "index-mars3d.html" if self.engine == "mars3d" else "index.html"
         self.token = secrets.token_urlsafe(20)
         self._reported = set()
         self._report_guard = threading.Lock()
@@ -254,12 +256,33 @@ class TerrainServer:
                         "viewer.js",
                         "viewer.css",
                         "compat.js",
+                        "terrain-visual.js",
                     ):
                         data = resource_path("assets/cesium/" + relative).read_bytes()
                         mime = (
                             mimetypes.guess_type(relative)[0]
                             or "application/octet-stream"
                         )
+                    elif relative in (
+                        "index-mars3d.html",
+                        "viewer-mars3d.js",
+                        "viewer-mars3d.css",
+                    ):
+                        data = resource_path("assets/mars3d/" + relative).read_bytes()
+                        mime = (
+                            mimetypes.guess_type(relative)[0]
+                            or "application/octet-stream"
+                        )
+                    elif relative.startswith("mars3d/"):
+                        sub = relative[len("mars3d/") :]
+                        data = resource_path("assets/mars3d/" + sub).read_bytes()
+                        mime = (
+                            mimetypes.guess_type(relative)[0]
+                            or "application/octet-stream"
+                        )
+                    elif relative == "turf/turf.min.js":
+                        data = resource_path("assets/mars3d/turf.min.js").read_bytes()
+                        mime = "text/javascript"
                     elif relative.startswith("cesium/"):
                         data = owner.store.engine_bytes(relative[7:])
                         mime = (
@@ -327,7 +350,9 @@ class TerrainServer:
             target=self.http.serve_forever, daemon=True, name="rdmap-3d-server"
         )
         self.thread.start()
-        self.url = f"http://127.0.0.1:{self.http.server_port}/{self.token}/index.html"
+        self.url = (
+            f"http://127.0.0.1:{self.http.server_port}/{self.token}/{self.index_name}"
+        )
 
     def close(self):
         self.store.closed.set()

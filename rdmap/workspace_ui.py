@@ -92,13 +92,19 @@ class WorkspaceUi:
         row.addWidget(menu_bar, 0, Qt.AlignVCenter)
         self.mode_buttons = {}
         self.mode_group = QButtonGroup(self)
-        for mode, text in (("2d", "2D"), ("3d", "3D")):
+        for mode, text, width in (("2d", "2D", 42), ("3d", "3D", 42), ("mars3d", "Mars3D", 70)):
             button = QToolButton()
             button.setText(text)
             button.setCheckable(True)
             button.setChecked(mode == "2d")
-            button.setFixedSize(42, 30)
-            button.setToolTip("二维地图" if mode == "2d" else "三维地形 · Cesium · WGS84")
+            button.setFixedSize(width, 30)
+            button.setToolTip(
+                {
+                    "2d": "二维地图",
+                    "3d": "三维地形 · Cesium · WGS84",
+                    "mars3d": "Mars3D 实验三维 · WGS84",
+                }[mode]
+            )
             self.mode_group.addButton(button)
             self.mode_buttons[mode] = button
             row.addWidget(button)
@@ -647,7 +653,8 @@ class WorkspaceUi:
         self._download_folder_action.setIcon(icon("folder"))
         self._refresh_layer_buttons(refresh_icons=True)
         self.map.update()
-        if self._cesium is not None:
-            self._cesium.set_theme()
+        for renderer in (self._cesium, self._mars3d):
+            if renderer is not None:
+                renderer.set_theme()
         QTimer.singleShot(0, self._position_map_overlays)
         QTimer.singleShot(0, self._adjust_task_height)

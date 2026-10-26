@@ -10,7 +10,12 @@ from PyQt5.QtCore import QSignalBlocker, QTimer
 from .geodesy import GeographicSelection, WGS84, provider_datum
 from .providers import MAP_SOURCES, PROVIDER_MAP, DEFAULT_PROVIDER_KEY
 from .terrain_server import supports_3d
-from .tile_math import range_from_bounds, range_from_rows_cols, tile_to_latlng
+from .tile_math import (
+    MAX_LATITUDE,
+    range_from_bounds,
+    range_from_rows_cols,
+    tile_to_latlng,
+)
 
 
 class MapModes:
@@ -22,8 +27,121 @@ class MapModes:
         self._displayed_selection = None
         self._selection_visible = False
         self._cesium = None
+        self._mars3d = None
         self._manual_range_dirty = False
         self._map_modes_closed = False
+
+    def _renderer_for_mode(self, mode):
+        if mode == "mars3d":
+            return self._mars3d
+        if mode == "3d":
+            return self._cesium
+        return None
+
+    def _active_renderer(self):
+        return self._renderer_for_mode(self._view_mode)
+
+    def _is_3d_mode(self):
+        return self._view_mode in ("3d", "mars3d")
+
+    def _ensure_renderer(self, mode):
+        renderer = self._renderer_for_mode(mode)
+        if renderer is not None:
+            return renderer
+        from .cesium_widget import CesiumWidget
+
+        renderer = CesiumWidget(self, engine="mars3d" if mode == "mars3d" else "cesium")
+        if mode == "mars3d":
+            self._mars3d = renderer
+        else:
+            self._cesium = renderer
+        self.map_stack.addWidget(renderer)
+        renderer.log.connect(self._append_log)
+        renderer.ready.connect(lambda m=mode: self._on_renderer_ready(m))
+
+        def current_page_only(slot):
+            def forward(*values):
+                # WebChannel 回报可能晚于页面切换或关闭，不能改写另一页的选区。
+                if (
+                    not self._map_modes_closed
+                    and not self._closing
+                    and not self._switching_mode
+                    and self._view_mode == mode
+                    and self._renderer_for_mode(mode) is renderer
+                    and not renderer.closed
+                ):
+                    slot(*values)
+
+            return forward
+
+        renderer.selectionChanged.connect(current_page_only(self._on_3d_selection))
+        renderer.selectionModeChanged.connect(
+            current_page_only(self._on_selection_mode_changed)
+        )
+        renderer.positionChanged.connect(current_page_only(self._on_map_position))
+        return renderer
+
+    def _current_wgs84_view(self):
+        renderer = self._active_renderer()
+        if renderer is None:
+            if self._is_3d_mode():
+                return self._geographic_selection.bounds_for(WGS84)
+            try:
+                return GeographicSelection(
+                    self.map.visible_bounds(), provider_datum(self.map.provider)
+                ).bounds_for(WGS84)
+            except ValueError:
+                return self._geographic_selection.bounds_for(WGS84)
+
+        camera = renderer.camera_state
+        if isinstance(camera, dict):
+            bounds = camera.get("bounds")
+            if (
+                isinstance(bounds, (tuple, list))
+                and len(bounds) == 4
+                and all(
+                    isinstance(v, (int, float))
+                    and not isinstance(v, bool)
+                    and math.isfinite(v)
+                    for v in bounds
+                )
+            ):
+                north, south, west, east = bounds
+                if (
+                    -MAX_LATITUDE <= south < north <= MAX_LATITUDE
+                    and -180 <= west < east <= 180
+                ):
+                    return tuple(bounds)
+
+            centre, height = camera.get("centre"), camera.get("height")
+            if (
+                self._valid_centre(centre)
+                and not any(isinstance(v, bool) for v in centre)
+                and abs(centre[0]) <= MAX_LATITUDE
+                and isinstance(height, (int, float))
+                and not isinstance(height, bool)
+                and math.isfinite(height)
+                and height > 0
+            ):
+                # 朝向天空时可能没有地表包络，以相机高度近似初始视野。
+                latitude, longitude = centre
+                aspect = max(
+                    0.5, min(3.0, renderer.width() / max(1, renderer.height()))
+                )
+                half_lat = max(0.001, min(85.0, height * 0.6 / 111_320))
+                half_lon = min(
+                    180.0,
+                    half_lat * aspect / max(0.01, math.cos(math.radians(latitude))),
+                )
+                return (
+                    min(MAX_LATITUDE, latitude + half_lat),
+                    max(-MAX_LATITUDE, latitude - half_lat),
+                    max(-180.0, longitude - half_lon),
+                    min(180.0, longitude + half_lon),
+                )
+
+        # 三维页尚未回报相机时，选区比隐藏二维地图的旧位置更可靠。
+        return self._geographic_selection.bounds_for(WGS84)
 
     def _restore_mode_settings(self):
         try:
@@ -51,8 +169,9 @@ class MapModes:
         if self._valid_centre(centre):
             self.map.set_center(*centre)
         self._mode_states["2d"] = self._capture_mode_state()
-        if self._settings.value("map/viewMode", "2d") == "3d":
-            QTimer.singleShot(0, lambda: self._set_map_mode("3d"))
+        restored_mode = str(self._settings.value("map/viewMode", "2d"))
+        if restored_mode in ("3d", "mars3d"):
+            QTimer.singleShot(0, lambda m=restored_mode: self._set_map_mode(m))
 
     @staticmethod
     def _valid_centre(value):
@@ -73,8 +192,9 @@ class MapModes:
         }
         if self._geographic_selection:
             state["selection"] = self._geographic_selection.to_dict()
-        if self._view_mode == "3d" and self._cesium is not None:
-            state["camera"] = self._cesium.camera_state
+        renderer = self._active_renderer()
+        if renderer is not None:
+            state["camera"] = renderer.camera_state
         if self._range is not None:
             item = self._range
             state["range"] = [
@@ -96,7 +216,7 @@ class MapModes:
                 json.dumps(self._geographic_selection.to_dict()),
             )
         # 旧配置键始终保留 2D 的基准，防止下次把 WGS84 数值当作高德坐标。
-        if self._view_mode == "3d":
+        if self._view_mode in ("3d", "mars3d"):
             state = self._mode_states.get("2d", {})
             provider = PROVIDER_MAP.get(
                 state.get("provider"), PROVIDER_MAP[DEFAULT_PROVIDER_KEY]
@@ -125,10 +245,11 @@ class MapModes:
             self._displayed_selection = signature
         if visible is not None:
             self._selection_visible = visible
-        if self._view_mode == "3d" and self._cesium is not None:
-            if visible and self._cesium.drawing:
-                self._cesium.command("cancelSelection")
-            self._cesium.command(
+        renderer = self._active_renderer()
+        if renderer is not None:
+            if visible and renderer.drawing:
+                renderer.command("cancelSelection")
+            renderer.command(
                 "setSelection",
                 (
                     list(self._geographic_selection.bounds_for(WGS84))
@@ -151,12 +272,13 @@ class MapModes:
     def _set_map_mode(self, mode):
         if self._map_modes_closed:
             return
-        if mode not in ("2d", "3d") or mode == self._view_mode:
+        if mode not in ("2d", "3d", "mars3d") or mode == self._view_mode:
             return
         if self._selection_active():
             self.map.clear_selection()
-            if self._cesium is not None:
-                self._cesium.command("cancelSelection")
+            renderer = self._active_renderer()
+            if renderer is not None:
+                renderer.command("cancelSelection")
         # 手工行列范围也参与坐标转换，不能只转换之前的经纬度输入。
         if self._manual_range_dirty and self._range is not None:
             item = self._range
@@ -174,28 +296,22 @@ class MapModes:
             for key, button in self.mode_buttons.items():
                 button.setChecked(key == self._view_mode)
             return
-        old_provider = self.map.provider
-        old_view = self.map.visible_bounds()
-        try:
-            wgs_view = GeographicSelection(
-                old_view, provider_datum(old_provider)
-            ).bounds_for(WGS84)
-        except ValueError:
-            wgs_view = self._geographic_selection.bounds_for(WGS84)
+        wgs_view = self._current_wgs84_view()
         self._mode_states[self._view_mode] = self._capture_mode_state()
         state = self._mode_states.get(mode, {})
         preferred = state.get(
-            "provider", "esri_hybrid" if mode == "3d" else DEFAULT_PROVIDER_KEY
+            "provider",
+            "esri_hybrid" if mode in ("3d", "mars3d") else DEFAULT_PROVIDER_KEY,
         )
         provider = PROVIDER_MAP.get(
             preferred,
             (
                 PROVIDER_MAP["esri_hybrid"]
-                if mode == "3d"
+                if mode in ("3d", "mars3d")
                 else PROVIDER_MAP[DEFAULT_PROVIDER_KEY]
             ),
         )
-        if mode == "3d" and not supports_3d(provider):
+        if mode in ("3d", "mars3d") and not supports_3d(provider):
             provider = PROVIDER_MAP["esri_hybrid"]
         self._switching_mode = True
         try:
@@ -252,37 +368,32 @@ class MapModes:
                     self.map.set_selection(*bounds)
                 else:
                     self.map.clear_selection()
-                if self._cesium is not None:
-                    self._cesium.command("setActive", False)
+                for renderer in (self._cesium, self._mars3d):
+                    if renderer is not None:
+                        renderer.command("setActive", False)
             else:
-                if self._cesium is None:
-                    from .cesium_widget import CesiumWidget
-
-                    self._cesium = CesiumWidget(self)
-                    self.map_stack.addWidget(self._cesium)
-                    self._cesium.log.connect(self._append_log)
-                    self._cesium.ready.connect(self._on_cesium_ready)
-                    self._cesium.selectionChanged.connect(self._on_3d_selection)
-                    self._cesium.selectionModeChanged.connect(
-                        self._on_selection_mode_changed
-                    )
-                    self._cesium.positionChanged.connect(self._on_map_position)
-                self.map_stack.setCurrentWidget(self._cesium)
-                self._cesium.set_source(provider)
-                self._cesium.set_theme()
-                self._cesium.command("setEnabled", not self._range_locked)
-                self._cesium.command("setActive", True)
+                renderer = self._ensure_renderer(mode)
+                self.map_stack.setCurrentWidget(renderer)
+                for other_mode in ("3d", "mars3d"):
+                    if other_mode != mode:
+                        other = self._renderer_for_mode(other_mode)
+                        if other is not None:
+                            other.command("setActive", False)
+                renderer.set_source(provider)
+                renderer.set_theme()
+                renderer.command("setEnabled", not self._range_locked)
+                renderer.command("setActive", True)
                 current = self._geographic_selection.to_dict()
                 if state.get("camera") and state.get("selection") == current:
-                    self._cesium.command("restoreCamera", state["camera"])
+                    renderer.command("restoreCamera", state["camera"])
                 else:
                     target = (
                         self._geographic_selection.bounds_for(WGS84)
                         if state.get("selection") != current and state
                         else wgs_view
                     )
-                    self._cesium.command("flyTo", list(target))
-                self._cesium.command(
+                    renderer.command("flyTo", list(target))
+                renderer.command(
                     "setSelection",
                     (
                         list(self._geographic_selection.bounds_for(WGS84))
@@ -296,38 +407,56 @@ class MapModes:
         finally:
             self._switching_mode = False
         self._append_log(
-            "切换视图：" + ("3D · Cesium · WGS84" if mode == "3d" else "2D · Painter")
+            "切换视图："
+            + {
+                "2d": "2D · Painter",
+                "3d": "3D · Cesium · WGS84",
+                "mars3d": "Mars3D · WGS84",
+            }[mode]
         )
         self.statusBar().showMessage(
-            "三维模式使用 WGS84 图层与高程" if mode == "3d" else "已恢复二维地图", 5000
+            (
+                "Mars3D 三维实验模式 · WGS84"
+                if mode == "mars3d"
+                else (
+                    "三维模式使用 WGS84 图层与高程"
+                    if mode == "3d"
+                    else "已恢复二维地图"
+                )
+            ),
+            5000,
         )
 
-    def _on_cesium_ready(self):
-        if self._view_mode == "3d":
-            self._cesium.set_source(self.map.provider)
-        self._cesium.set_theme()
-        self._cesium.command("setEnabled", not self._range_locked)
-        self._cesium.command("setActive", self._view_mode == "3d")
+    def _on_renderer_ready(self, mode):
+        renderer = self._renderer_for_mode(mode)
+        if renderer is None:
+            return
+        if self._view_mode == mode:
+            renderer.set_source(self.map.provider)
+        renderer.set_theme()
+        renderer.command("setEnabled", not self._range_locked)
+        renderer.command("setActive", self._view_mode == mode)
 
     def _on_3d_selection(self, bounds):
-        if self._view_mode != "3d" or self._range_locked:
+        if self._view_mode not in ("3d", "mars3d") or self._range_locked:
             return
         self._on_map_selection(*bounds)
         self._remember_geographic_selection(True)
 
     def _selection_active(self):
-        return (
-            self._cesium.drawing
-            if self._view_mode == "3d" and self._cesium is not None
-            else self.map.selection_mode
-        )
+        renderer = self._active_renderer()
+        if renderer is not None:
+            return renderer.drawing
+        return self.map.selection_mode
 
     def _mode_fly_to_range(self):
-        if self._view_mode == "3d" and self._cesium is not None:
-            self._cesium.command("flyTo", list(self._extent_values()))
+        renderer = self._active_renderer()
+        if renderer is not None:
+            renderer.command("flyTo", list(self._extent_values()))
 
     def _shutdown_map_modes(self):
         self._map_modes_closed = True
         self.map.set_active(False)
-        if self._cesium is not None:
-            self._cesium.shutdown()
+        for renderer in (self._cesium, self._mars3d):
+            if renderer is not None:
+                renderer.shutdown()

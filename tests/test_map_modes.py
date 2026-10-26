@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import requests
-from PyQt5.QtCore import QSettings, pyqtSignal
+from PyQt5.QtCore import QSettings, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from rdmap.geodesy import GCJ02, WGS84, GeographicSelection, from_wgs84, to_wgs84
@@ -152,8 +152,9 @@ class FakeCesium(QWidget):
     selectionChanged = pyqtSignal(object)
     selectionModeChanged = pyqtSignal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, engine="cesium"):
         super().__init__(parent)
+        self.engine = engine
         self.camera_state = {}
         self.drawing = False
         self.commands = []
@@ -250,6 +251,153 @@ class ModeUiTests(unittest.TestCase):
             ["google_satellite"],
         )
 
+    def test_mars3d_mode_has_own_renderer(self):
+        w = self.window
+        self.assertIn("mars3d", w.mode_buttons)
+        w._set_map_mode("mars3d")
+        self.assertEqual(w._view_mode, "mars3d")
+        self.assertIsNotNone(w._mars3d)
+        self.assertEqual(w._mars3d.engine, "mars3d")
+        self.assertTrue(w.mode_buttons["mars3d"].isChecked())
+        self.assertEqual(w.map.provider.key, "esri_hybrid")
+
+        w._set_map_mode("3d")
+        self.assertEqual(w._view_mode, "3d")
+        self.assertIsNotNone(w._cesium)
+        self.assertTrue(w.mode_buttons["3d"].isChecked())
+
+        w._set_map_mode("2d")
+        self.assertEqual(w._view_mode, "2d")
+        self.assertFalse(w.mode_buttons["mars3d"].isChecked())
+
+    def _assert_first_3d_handoff_uses_current_view(self, source, target):
+        w = self.window
+        w._set_map_mode(source)
+        renderer = w._active_renderer()
+        camera = {
+            "position": [1344183.4875, -4687724.9096, 4174068.6118],
+            "heading": 0,
+            "pitch": -1.5707963267948966,
+            "roll": 0,
+            "bounds": [40.9, 40.6, -74.2, -73.8],
+            "centre": [40.75, -74.0],
+            "height": 50_000,
+            "terrainVisual": {"active": True, "exaggeration": 2.5},
+        }
+        renderer.camera_state = camera
+        original_selection = w._geographic_selection
+        self.assertNotEqual(tuple(camera["bounds"]), w.map.visible_bounds())
+
+        w._set_map_mode(target)
+        self.assertIn(("flyTo", camera["bounds"]), w._active_renderer().commands)
+        self.assertEqual(w._geographic_selection, original_selection)
+        self.assertEqual(w._mode_states[source]["camera"], camera)
+
+        # 已打开过的页面继续恢复自己的相机，而非另一页的新视野。
+        w._active_renderer().camera_state = {**camera, "bounds": [30, 29, 110, 111]}
+        w._set_map_mode(source)
+        self.assertEqual(renderer.commands[-2], ("restoreCamera", camera))
+
+    def test_first_cesium_to_mars3d_handoff_uses_current_view(self):
+        self._assert_first_3d_handoff_uses_current_view("3d", "mars3d")
+
+    def test_first_mars3d_to_cesium_handoff_uses_current_view(self):
+        self._assert_first_3d_handoff_uses_current_view("mars3d", "3d")
+
+    def test_invalid_3d_view_uses_camera_centre_or_selection(self):
+        w = self.window
+        w._set_map_mode("mars3d")
+        renderer = w._active_renderer()
+        renderer.camera_state = {
+            "bounds": [41, 40, -73, -74],
+            "centre": [40.75, -74],
+            "height": 50_000,
+        }
+        north, south, west, east = w._current_wgs84_view()
+        self.assertGreater(north, 40.75)
+        self.assertLess(south, 40.75)
+        self.assertLess(west, -74)
+        self.assertGreater(east, -74)
+        self.assertLess(north - south, 2)
+        fallback = w._geographic_selection.bounds_for(WGS84)
+        for camera in (
+            {},
+            [],
+            {"bounds": [float("nan"), 40, -75, -73]},
+            {"bounds": [91, 40, -75, -73]},
+            {"bounds": [True, 0, -75, -73]},
+            {"bounds": [41, 40, -75]},
+            {"centre": [40.75, -74], "height": float("inf")},
+            {"centre": [40.75, -74], "height": 0},
+            {"centre": [True, -74], "height": 50_000},
+        ):
+            with self.subTest(camera=camera):
+                renderer.camera_state = camera
+                self.assertEqual(w._current_wgs84_view(), fallback)
+
+    def test_delayed_hidden_renderer_signals_do_not_change_current_state(self):
+        w = self.window
+        for source, target in (("3d", "mars3d"), ("mars3d", "3d")):
+            with self.subTest(source=source, target=target):
+                w._set_map_mode(source)
+                old_renderer = w._active_renderer()
+
+                def delayed_reply(renderer=old_renderer):
+                    renderer.selectionChanged.emit([40.8, 40.7, -74.1, -73.9])
+                    renderer.selectionModeChanged.emit(False)
+                    renderer.positionChanged.emit(40.75, -74)
+
+                QTimer.singleShot(0, delayed_reply)
+                w._set_map_mode(target)
+                current_renderer = w._active_renderer()
+                w._begin_selection()
+                before = (w._extent_values(), w._coord_label.text(), w.btn_draw.text())
+                self.app.processEvents()
+                self.assertEqual(
+                    (w._extent_values(), w._coord_label.text(), w.btn_draw.text()),
+                    before,
+                )
+                self.assertTrue(current_renderer.drawing)
+                self.assertFalse(w.btn_draw.isEnabled())
+
+                # 当前页面的回报仍生效，取消框选的同步回报也应更新按钮。
+                current_renderer.positionChanged.emit(29.35, 110.45)
+                self.assertIn("110.450000", w._coord_label.text())
+                current_renderer.selectionChanged.emit([29.4, 29.3, 110.4, 110.5])
+                self.assertEqual(w._extent_values(), (29.4, 29.3, 110.4, 110.5))
+                self.assertFalse(current_renderer.drawing)
+                self.assertTrue(w.btn_draw.isEnabled())
+
+    def test_renderer_signals_during_switch_or_after_close_are_ignored(self):
+        w = self.window
+        w._set_map_mode("mars3d")
+        w._set_map_mode("3d")
+        current = w._active_renderer()
+        before = (w._extent_values(), w._coord_label.text(), w.btn_draw.text())
+        w._switching_mode = True
+        try:
+            current.selectionChanged.emit([40.8, 40.7, -74.1, -73.9])
+            current.selectionModeChanged.emit(True)
+            current.positionChanged.emit(40.75, -74)
+        finally:
+            w._switching_mode = False
+        self.assertEqual(
+            (w._extent_values(), w._coord_label.text(), w.btn_draw.text()), before
+        )
+
+        def delayed_replies():
+            for renderer in (w._cesium, w._mars3d):
+                renderer.selectionChanged.emit([40.8, 40.7, -74.1, -73.9])
+                renderer.selectionModeChanged.emit(True)
+                renderer.positionChanged.emit(40.75, -74)
+
+        QTimer.singleShot(0, delayed_replies)
+        w.close()
+        self.app.processEvents()
+        self.assertEqual(
+            (w._extent_values(), w._coord_label.text(), w.btn_draw.text()), before
+        )
+
     def test_close_cancels_preview_and_pending_mode_restore(self):
         w = self.window
         w.close()
@@ -288,19 +436,64 @@ class ModeUiTests(unittest.TestCase):
         w._set_extent_values(23.6, 23.1, 113.3, 113.9, sync_map=True)
         canonical = w._geographic_selection
         w._set_map_mode("3d")
-        w._cesium.camera_state = {
+        old_camera = {
             "position": [1, 2, 3],
             "heading": 0,
             "pitch": -1,
             "roll": 0,
         }
+        w._cesium.camera_state = old_camera
         w.close()
         self.window = MainWindow()
         self.app.processEvents()
         self.assertEqual(self.window._view_mode, "3d")
         self.assertEqual(self.window._geographic_selection, canonical)
+        # 旧配置没有 terrainVisual 字段，仍应完整恢复相机。
+        self.assertNotIn("terrainVisual", old_camera)
+        self.assertIn(("restoreCamera", old_camera), self.window._cesium.commands)
         self.window._set_map_mode("2d")
         self.assertEqual(self.window._extent_values(), canonical.native_bounds)
+
+    def test_each_3d_mode_restores_its_own_terrain_visual_after_restart(self):
+        w = self.window
+        cesium_camera = {
+            "position": [1344183.4875, -4687724.9096, 4174068.6118],
+            "heading": 0,
+            "pitch": -1.5707963267948966,
+            "roll": 0,
+            "bounds": [40.9, 40.6, -74.2, -73.8],
+            "centre": [40.75, -74],
+            "height": 50_000,
+            "terrainVisual": {"active": True, "exaggeration": 2.4},
+        }
+        mars_camera = {
+            "position": [6428137, 0, 0],
+            "heading": 0.25,
+            "pitch": -1.2,
+            "roll": 0,
+            "bounds": [0.2, -0.2, -0.3, 0.3],
+            "centre": [0, 0],
+            "height": 50_000,
+            "terrainVisual": {"active": False, "exaggeration": 1.6},
+        }
+        w._set_map_mode("3d")
+        w._cesium.camera_state = cesium_camera
+        w._set_map_mode("mars3d")
+        w._mars3d.camera_state = mars_camera
+        canonical = w._geographic_selection
+        w.close()
+
+        self.window = MainWindow()
+        self.app.processEvents()
+        reopened = self.window
+        self.assertEqual(reopened._view_mode, "mars3d")
+        self.assertEqual(reopened._geographic_selection, canonical)
+        self.assertIn(("restoreCamera", mars_camera), reopened._mars3d.commands)
+        self.assertEqual(reopened._mode_states["mars3d"]["camera"], mars_camera)
+
+        reopened._set_map_mode("3d")
+        self.assertIn(("restoreCamera", cesium_camera), reopened._cesium.commands)
+        self.assertEqual(reopened._geographic_selection, canonical)
 
     def test_manual_tile_range_survives_roundtrip(self):
         w = self.window

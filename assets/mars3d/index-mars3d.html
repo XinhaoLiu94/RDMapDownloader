@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="cesium/Widgets/widgets.css">
+  <link rel="stylesheet" href="mars3d/mars3d.css">
+  <link rel="stylesheet" href="viewer-mars3d.css">
+  <script src="compat.js"></script>
+  <script>window.CESIUM_BASE_URL = new URL('cesium/', location.href).href;</script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+  <div id="globe"></div>
+  <div class="tools">
+    <span>WGS84 · Mars3D</span>
+    <button id="reset">复位视图</button>
+    <button id="north">北向上</button>
+    <button id="tilt">倾斜视角</button>
+    <button id="terrain">山体视角</button>
+    <label class="exag"><span>夸张</span><input id="exaggeration" type="range" min="1" max="3" step="0.1" value="2"><b id="exagValue">2.0×</b></label>
+    <button id="minus" aria-label="缩小">−</button>
+    <button id="plus" aria-label="放大">＋</button>
+  </div>
+  <div class="guide">左键平移 · 滚轮缩放 · 中键拖动旋转</div>
+  <div id="drawing" hidden>在地表点击两个对角点，Esc 取消</div>
+  <div id="coordinates">经度 --　纬度 --</div>
+  <div id="attribution"></div>
+  <script src="cesium/Cesium.js"></script>
+  <script src="terrain-visual.js"></script>
+  <script src="turf/turf.min.js"></script>
+  <script src="mars3d/mars3d.js"></script>
+  <script src="viewer-mars3d.js"></script>
+</body>
+</html>

@@ -447,7 +447,7 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
         if source is None:
             return
         providers = providers_for_source(source_key)
-        if self._view_mode == "3d":
+        if self._is_3d_mode():
             providers = tuple(provider for provider in providers if supports_3d(provider))
         provider_keys = {provider.key for provider in providers}
         target_key = preferred if preferred in provider_keys else source.default_provider_key
@@ -549,8 +549,9 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
 
         if not self._loading_settings:
             self._remember_geographic_selection()
-            if self._view_mode == "3d" and self._cesium is not None:
-                self._cesium.set_source(provider)
+            renderer = self._active_renderer()
+            if renderer is not None:
+                renderer.set_source(provider)
             self._maybe_update_default_output(provider)
             if previous_provider.key != provider.key:
                 action = "切换图源" if previous_provider.source != provider.source else "切换图层"
@@ -601,30 +602,33 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
     def _begin_selection(self) -> None:
         if self._closing or self._range_locked:
             return
-        if self._view_mode == "3d":
-            self._cesium.begin_selection()
+        renderer = self._active_renderer()
+        if renderer is not None:
+            renderer.begin_selection()
             return
         self.map.start_selection()
 
     def _clear_selection(self) -> None:
         self.map.clear_selection()
         self._selection_visible = False
-        if self._cesium is not None:
-            self._cesium.command("cancelSelection")
-            self._cesium.command("setSelection", None)
+        for renderer in (self._cesium, self._mars3d):
+            if renderer is not None:
+                renderer.command("cancelSelection")
+                renderer.command("setSelection", None)
 
     def _use_current_view(self) -> None:
         if self._closing:
             return
-        if self._view_mode == "3d":
-            self._cesium.command("useCurrentView")
+        renderer = self._active_renderer()
+        if renderer is not None:
+            renderer.command("useCurrentView")
             return
         north, south, west, east = self.map.visible_bounds()
         self._set_extent_values(north, south, west, east, sync_map=True)
         self.statusBar().showMessage("已用当前地图视野更新框选范围", 5000)
 
     def _locate_tile_range(self) -> None:
-        if self._view_mode == "3d":
+        if self._is_3d_mode():
             self._mode_fly_to_range()
             return
         north = self.north_spin.value()
@@ -1082,7 +1086,7 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
                 raise ValueError("任务级别超过该图源当前支持的最大级别。")
             output_dir = Path(task["output_dir"])
             output_dir.mkdir(parents=True, exist_ok=True)
-            if self._view_mode == "3d" and not supports_3d(provider):
+            if self._is_3d_mode() and not supports_3d(provider):
                 self._set_map_mode("2d")
             with QSignalBlocker(self.source_combo):
                 self.source_combo.setCurrentIndex(self.source_combo.findData(provider.source))
@@ -1279,8 +1283,9 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
         self.btn_download_stop.setEnabled(running)
         self.act_use_view.setEnabled(not running)
         self._range_locked = running or self._stitch_worker is not None
-        if self._cesium is not None:
-            self._cesium.command("setEnabled", not self._range_locked)
+        for renderer in (self._cesium, self._mars3d):
+            if renderer is not None:
+                renderer.command("setEnabled", not self._range_locked)
         if running:
             self.btn_stitch_start.setEnabled(False)
         else:
@@ -1476,8 +1481,9 @@ class MainWindow(MapModes, WorkspaceUi, QMainWindow):
         self.btn_stitch_stop.setEnabled(running)
         self.act_use_view.setEnabled(not running)
         self._range_locked = running or self._download_worker is not None
-        if self._cesium is not None:
-            self._cesium.command("setEnabled", not self._range_locked)
+        for renderer in (self._cesium, self._mars3d):
+            if renderer is not None:
+                renderer.command("setEnabled", not self._range_locked)
         if running:
             self.btn_download_start.setEnabled(False)
         else:

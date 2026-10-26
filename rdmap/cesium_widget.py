@@ -82,8 +82,9 @@ class CesiumWidget(QWidget):
     _status = pyqtSignal(str)
     _failure = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, engine: str = "cesium"):
         super().__init__(parent)
+        self.engine = engine if engine in ("cesium", "mars3d") else "cesium"
         self.is_ready = False
         self.closed = False
         self.drawing = False
@@ -101,7 +102,8 @@ class CesiumWidget(QWidget):
         placeholder = QWidget()
         box = QVBoxLayout(placeholder)
         box.addStretch()
-        title = QLabel("三维地图 · WGS84")
+        title_text = "Mars3D 三维 · WGS84" if self.engine == "mars3d" else "三维地图 · WGS84"
+        title = QLabel(title_text)
         title.setObjectName("panelTitle")
         title.setAlignment(Qt.AlignCenter)
         box.addWidget(title)
@@ -165,7 +167,9 @@ class CesiumWidget(QWidget):
                 if self.closed:
                     return
                 if self._server is None:
-                    self._server = TerrainServer(self._store, self._failure.emit)
+                    self._server = TerrainServer(
+                        self._store, self._failure.emit, engine=self.engine
+                    )
                 if self.closed:
                     self._server.close()
                     return
@@ -222,7 +226,10 @@ class CesiumWidget(QWidget):
         self._pending.clear()
         self._set_status("WGS84 · 高程随视野靠近自动加载")
         self.ready.emit()
-        self.log.emit("三维地图已就绪：Cesium · WGS84")
+        if self.engine == "mars3d":
+            self.log.emit("Mars3D 地图已就绪：Mars3D 3.7.17 · WGS84")
+        else:
+            self.log.emit("三维地图已就绪：Cesium · WGS84")
 
     def _on_error(self, message):
         if self.closed:

@@ -4,7 +4,7 @@
 [GMapDownloader](https://github.com/hejustbrave/GMapDownloader)。支持 **高德、Google、天地图、Esri** 四组图源。
 
 原程序依赖 GMap.NET 控件；本版本的 2D 使用 QPainter 自绘瓦片地图，依赖 **PyQt5** 和 **requests**。
-可选的 3D 使用 **Qt WebEngine + CesiumJS**，不需要 Unity、GDAL 或 .NET 环境。
+可选的 3D 使用 **Qt WebEngine + CesiumJS**，Mars3D 实验页复用同一 WebEngine；不需要 Unity、GDAL 或 .NET 环境。
 
 项目地址：[XinhaoLiu94/RDMapDownloader](https://github.com/XinhaoLiu94/RDMapDownloader)。
 本项目的 Python 实现采用 [GPL-3.0-only](LICENSE)，来源、第三方组件与地图数据的权利说明见 [NOTICE.md](NOTICE.md)。
@@ -13,7 +13,8 @@
 
 ## 功能
 
-- **2D / 3D 切换**：2D 保留各图源的原生坐标，3D 使用 WGS84 卫星影像与真实高程；分别保存图源、视图和相机。
+- **2D / 3D / Mars3D 切换**：2D 保留各图源的原生坐标；3D 使用 CesiumJS，Mars3D 使用 Mars3D 3.7.17 + 当前 Cesium 1.117，
+  三种模式分别保存图源、视图和相机。Mars3D 为实验页，不替换现有 Cesium 3D。
   同一选区切换时转换坐标，保留原始边界，避免反复切换导致范围扩大；现有下载任务参数独立保存。
 - **双主题工作区**：暖白／炭黑底色配绿色强调色，顶部导航、悬浮地图工具、图层缩略卡与分区面板；
   下载／拼接操作固定在右侧底部，滚动设置时仍可直接开始或停止任务。
@@ -71,11 +72,11 @@ python -m pip install -r requirements-3d.txt
 
 ### 三维地图
 
-顶部 **2D / 3D** 切换渲染模式。2D 默认高德 GCJ-02；3D 默认 Esri 卫星加标注，
+顶部 **2D / 3D / Mars3D** 切换渲染模式。2D 默认高德 GCJ-02；3D 默认 Esri 卫星加标注，
 也可选择 Esri 纯影像或 Google 纯卫星。Google 的大陆道路混合注记不参与 3D，避免叠加偏移。
-在三维视图左键拖动、滚轮缩放、中键拖动旋转，点击“倾斜视角”查看地形起伏。
+在三维视图左键拖动、滚轮缩放、中键拖动旋转；低角度山体效果见下一节“山体视角”。
 右侧仍可框选、输入经纬度、使用当前视野或常用区域，并通过原有任务管理下载和拼接影像。
-两种模式分别记住图源和视图；选区有改动时，另一模式使用转换后的范围。
+三种模式分别记住图源和视图；选区有改动时，另一模式使用转换后的范围。
 
 首次进入 3D 需要联网下载 Cesium 组件，运行资源按需缓存。为兼容 Qt 5 WebEngine 的 Chromium，
 当前固定为已验证的 CesiumJS 1.117，主脚本校验 SHA-256，不依赖 Cesium ion 账号或 token。
@@ -88,6 +89,49 @@ python -m pip install -r requirements-3d.txt
 原始高程分辨率不会因为放大而提高。无高程覆盖或网络失败时显示加载错误，不会用随机高度替代。
 
 当前 3D 是**卫星贴图加地形预览**，不包含城市建筑模型；DEM 缓存尚未加入下载任务管理，也不提供高程/三维模型导出。
+3D 与 Mars3D 模式下载的仍是影像瓦片，按 `级别/行/列.png` 保存，并非 3D Tiles 模型。
+下载输出目录与地图预览缓存分开；当前没有直接打开本地瓦片目录的正式界面入口。
+
+### 山体视角（低角度地形轮廓）
+
+之前 3D 和 Mars3D 都是 90° 俯视、无光照、1 倍高程，所以两页看起来几乎一样；
+真正影响“山体轮廓”的是地形夸张、光照、大气和相机角度，不是 Mars3D 这个封装。
+
+现在 Cesium 3D 和 Mars3D 页的悬浮工具栏都增加了：
+
+- **山体视角**：把相机切到低角度斜视，以当前选区中心为视点；
+- **夸张 1–3×**：提高地形垂直夸张，让山脊和山体高差更明显；
+- **恢复俯视**：关闭山体光照/大气并回到俯视。
+
+开启后会同时打开地形光照、天空大气和雾，相机高度根据选区范围自动计算，避免直接钻进山体。
+山体光照相对于所在地区保持固定的日间方向，不受经度、时区或真实昼夜影响。
+各三维页分别保存山体开关和夸张倍率，重启或重新加载页面时与相机一起恢复。
+
+![山体视角（秦岭示例）](docs/screenshot-mountain.png)
+
+这是实时 Cesium 渲染的近似效果，不是影视级离线地形。当前高程瓦片每块是 65×65，
+远景山脊仍会有块状/纹理拉伸感；如果要更接近 B 站户外复盘视频的质感，还需要：
+更高分辨率 DEM、地形晕染/等高线着色、路线轨迹与标注，以及 Blender/Aerialod 之类的离线渲染。
+下一步可以在这个基础上继续做，不必替换现有的 Cesium 3D。
+
+### Mars3D 实验页
+
+顶部有 **Mars3D** 页签，使用 Mars3D 3.7.17（配套当前 Cesium 1.117），不替换原有 Cesium 3D。
+它复用现有本地影像/高程服务和 2D/3D 选区数据，支持同样的卫星影像、地形、框选和下载流程；
+三种模式各自保存图源、相机和视图状态。
+
+![Mars3D 实验页](docs/screenshot-mars3d.png)
+
+Mars3D 资源已随项目放在 `assets/mars3d/`，不需要 Node.js；仍然使用 `requirements-3d.txt` 中的
+PyQtWebEngine。社区免费版会在页面和控制台保留 Mars3D Logo/版权信息；如果要移除 Logo 用于商业交付，
+需要购买 Mars3D 商业授权。详见 [SDK 授权说明](http://mars3d.cn/docs/advanced/authorization/) 和
+[NOTICE.md](NOTICE.md)。更详细的版本取舍、验证记录和后续升级路径见
+[docs/mars3d-assessment.md](docs/mars3d-assessment.md)。
+
+当前 Mars3D 与 Cesium 3D 一样只列 Esri / Google 的 WGS84 图层；高德、天地图仍在 2D 使用。
+这里固定 Mars3D 3.7.17 是为了匹配现有 Cesium 1.117，避免为了最新版 3.11.x 升级 Cesium
+并重新验证整个 3D 页。山体视角是两页共用的 Cesium 场景能力，Mars3D 页和 Cesium 页都能用，
+它也不是 Mars3D 独有的视觉效果。
 GCJ-02 与 WGS84 转换采用常用数值近似，用于视图衔接；CGCS2000 在切换时仅作近似定位，均不作为测绘基准转换。
 
 ## 使用步骤
@@ -252,6 +296,8 @@ python main.py
 python -m unittest discover -s tests -v
 ```
 
+三维相关测试包括 Mars3D 静态资源/本地服务路由、模式切换和坐标转换；`test_mars3d_assets` 不会启动 WebEngine。
+
 真实网络测试包含 6 张合成瓦片的下载与拼接，以及 Z10 / Z11 / Z12 的连续下载：
 
 ```powershell
@@ -266,7 +312,8 @@ python -m unittest discover -s tests -v
 已提供图标 [assets/icon.ico](assets/icon.ico) 和打包脚本 [build_exe.bat](build_exe.bat)：
 
 包含三维组件时运行 `build_exe.bat 3d`；脚本会先安装可选依赖，PyInstaller 自动收集 Qt WebEngine。
-Cesium 资源仍在首次运行时下载，打包时不包含地图与高程数据。
+Mars3D/Turf 前端资源在 `assets/mars3d/`，会随包分发；Cesium 资源仍在首次运行时下载，
+打包时不包含地图与高程数据。
 
 ```powershell
 python -m pip install pyinstaller
@@ -286,6 +333,11 @@ RDMapDownloader/
 │  ├─ app.py                # QApplication / 主题 / 异常钩子
 │  ├─ main_window.py        # 主窗口、交互、任务调度
 │  ├─ map_widget.py         # 自绘瓦片地图（网络、缓存、框选、网格）
+│  ├─ cesium_widget.py      # Qt WebEngine 三维页（Cesium / Mars3D）
+│  ├─ terrain_server.py     # 本地三维资源、影像代理与地形服务
+│  ├─ map_modes.py          # 2D / 3D / Mars3D 模式与相机/选区衔接
+│  ├─ geodesy.py            # GCJ-02 / WGS84 / CGCS2000 近似转换
+│  ├─ elevation.py          # EGM96 与 HGT 高程
 │  ├─ workers.py            # 下载线程、拼接线程
 │  ├─ tile_math.py          # Web Mercator / XYZ 瓦片数学
 │  ├─ providers.py          # 四组图源、透明注记与请求头
@@ -303,10 +355,13 @@ RDMapDownloader/
 │  └─ __main__.py           # python -m rdmap
 ├─ tests/                   # unittest 测试
 ├─ tools/                   # 截图、图标生成脚本
-├─ assets/                  # SVG/ICO 图标
+├─ assets/
+│  ├─ icon.*                # 应用图标
+│  ├─ cesium/               # Cesium 3D 页面
+│  └─ mars3d/               # Mars3D 3.7.17、Turf、页面与版权说明
 ├─ LICENSE                  # GPL-3.0-only
 ├─ NOTICE.md                # 来源与第三方权利说明
-└─ docs/screenshot.png
+└─ docs/                    # 截图、Mars3D 评估
 ```
 
 ## 和原版的差异
@@ -315,6 +370,7 @@ RDMapDownloader/
 |---|---|---|
 | 界面 | WinForms + GMap.NET | PyQt5，自绘瓦片控件 |
 | 图源 | 仅高德 | 高德 / Google / 天地图 / Esri，支持卫星标注合成 |
+| 三维 | 无 | 2D / 3D(Cesium) / Mars3D 三个页签，分别保存视角与相机 |
 | 下载 | 单线程顺序 | 线程池并发 + 重试 + 停止 |
 | 进度 | 只显示“爬取中” | 百分比、速度、失败数、剩余时间 |
 | 瓦片缓存 | 无 | 内存 + 磁盘缓存，可清理 |
@@ -356,6 +412,7 @@ Google 的瓦片服务在中国大陆通常无法直连，需要可访问 Google
 4. 请遵守地图服务商的使用条款，仅将本工具用于个人学习、科研或已获授权的场景，合理控制下载频率和范围。
 5. 瓦片数据版权归各图源及其数据提供者所有；因数据使用不当造成的问题，作者不承担责任。
 6. 程序会访问网络加载底图；首次打开地图需要联网，之后命中的瓦片会走本地缓存。
+7. Mars3D 社区版会保留其 Logo 和控制台版权信息；商业去 Logo 需另行购买 Mars3D 授权。
 
 ## 致谢
 

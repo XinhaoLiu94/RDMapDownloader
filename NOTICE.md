@@ -28,6 +28,10 @@ RDMapDownloader 的 Python 实现及本项目原创资源采用 **GNU General Pu
 - 可选 [PyQtWebEngine](https://www.riverbankcomputing.com/software/pyqtwebengine/)：按 GPL v3 使用；Qt WebEngine 和 Chromium 的第三方许可独立适用。
 - [CesiumJS 1.117](https://github.com/CesiumGS/cesium/tree/1.117)：Apache License 2.0；运行时从官方发布地址按需缓存，
   版权与许可证见其 [LICENSE.md](https://github.com/CesiumGS/cesium/blob/1.117/LICENSE.md)。保留地图视图中的数据署名。
+- [Mars3D 3.7.17](https://www.npmjs.com/package/mars3d)：Apache License 2.0；随项目放在 `assets/mars3d/`，
+  使用社区免费版，保留其 Logo 和控制台版权信息。版权归合肥火星科技有限公司所有；商业去 Logo 授权见
+  [Mars3D 授权说明](http://mars3d.cn/docs/advanced/authorization/)。
+- [Turf.js 6.5.0](https://turfjs.org/)：MIT License；`assets/mars3d/turf.min.js` 随 Mars3D 页面使用。
 - 打包、图标生成等开发工具以各自许可证为准；发布可执行文件时，仍需保留随附依赖的版权和许可文件。
 
 ## 图源与地图数据
